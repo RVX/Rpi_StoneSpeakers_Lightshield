@@ -1,0 +1,16 @@
+[Unit]
+Description=Pytremor Lux Adaptive LED Controller
+After=pigpiod.service
+Requires=pigpiod.service
+
+[Service]
+Type=simple
+User=correr4
+WorkingDirectory=/home/correr4
+ExecStart=/usr/bin/python3 /home/correr4/UNDERWATER_LIGTHING_LUX.py
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
