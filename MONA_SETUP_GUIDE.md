@@ -10,13 +10,13 @@
 
 ## Pi Inventory
 
-| Pi | Hostname | User | Password | Static IP (WiFi) | SSH Key | pigpiod | Service | Status |
-|----|----------|------|----------|-----------------|---------|---------|---------|--------|
-| 1  | sjc1     | sjc1 | sjcsjc   | 10.22.171.3/20  | ✔       | ✔       | ✔       | ✅ Complete |
-| 2  | sjc2     | sjc2 | sjcsjc   | TBD             | ☐       | ☐       | ☐       | ⏳ Pending |
-| 3  | sjc3     | sjc3 | sjcsjc   | TBD             | ☐       | ☐       | ☐       | ⏳ Pending |
-| 4  | sjc4     | sjc4 | sjcsjc   | TBD             | ☐       | ☐       | ☐       | ⏳ Pending |
-| 5  | sjc5     | sjc5 | sjcsjc   | TBD             | ☐       | ☐       | ☐       | ⏳ Pending |
+| Pi | Hostname | User | Password | Static IP (WiFi) | SSH Key | pigpiod | Service | openport | openport SSH | Status |
+|----|----------|------|----------|-----------------|---------|---------|---------|----------|--------------|--------|
+| 1  | sjc1     | sjc1 | sjcsjc   | 10.22.171.3/20  | ✔       | ✔       | ✔       | ✔ port 19092 | `ssh -p 19092 sjc1@spr.openport.io` | ✅ Complete |
+| 2  | sjc2     | sjc2 | sjcsjc   | TBD             | ☐       | ☐       | ☐       | ☐        | TBD          | ⏳ Pending |
+| 3  | sjc3     | sjc3 | sjcsjc   | TBD             | ☐       | ☐       | ☐       | ☐        | TBD          | ⏳ Pending |
+| 4  | sjc4     | sjc4 | sjcsjc   | TBD             | ☐       | ☐       | ☐       | ☐        | TBD          | ⏳ Pending |
+| 5  | sjc5     | sjc5 | sjcsjc   | TBD             | ☐       | ☐       | ☐       | ☐        | TBD          | ⏳ Pending |
 
 ---
 
@@ -104,6 +104,12 @@ ssh -i "$env:USERPROFILE\.ssh\id_ed25519_pis" -o IdentitiesOnly=yes -o StrictHos
 
 # Upload a file
 scp -i "$env:USERPROFILE\.ssh\id_ed25519_pis" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no FILE sjcN@sjcN.local:/home/sjcN/FILE
+
+# --- REMOTE ACCESS (from anywhere, no ethernet needed) ---
+# Once openport is installed and running on a Pi, SSH via the public tunnel:
+ssh -i "$env:USERPROFILE\.ssh\id_ed25519_pis" -o IdentitiesOnly=yes -p PORT sjcN@spr.openport.io
+# PORT is found with:  sudo openport list   (run on the Pi)
+# sjc1 current port:  19092
 ```
 
 ---
@@ -271,6 +277,136 @@ up X min, ...
 
 ---
 
+### Step 12 — Install openport.io (Remote Access Tunnel)
+
+openport.io creates a permanent SSH tunnel through the openport.io relay server,
+allowing you to reach the Pi from anywhere without ethernet or direct WiFi access.
+This bypasses museum AP isolation entirely once the Pi has any internet connection.
+
+> **Architecture:** Pi → outbound SSH → `spr.openport.io` relay → your laptop  
+> **Security:** ip-link-protection disabled for SSH convenience; the SSH key still
+> protects the session itself.
+
+#### 12a — Download and install the ARM64 package
+
+```bash
+# openport is NOT in apt repos — install from GitHub releases
+cd /tmp
+wget -q https://github.com/openportio/openport-go/releases/download/v2.2.3/openport_2.2.3-1_arm64.deb \
+  -O openport.deb
+echo sjcsjc | sudo -S dpkg -i openport.deb
+```
+
+Expected tail of output:
+```
+Setting up openport (2.2.3-1) ...
+openport.service is not a native service, redirecting to systemd-sysv-install.
+Executing: /usr/lib/systemd/systemd-sysv-install enable openport
+```
+
+> The `.deb` installs a sysv init.d script **and** a native systemd template unit
+> at `/lib/systemd/system/openport@.service`. Use the native unit (Step 12b) —
+> the sysv script runs too early in the boot sequence (before networking) and does
+> not auto-start reliably on Debian Trixie.
+
+#### 12b — Configure the ip-link-protection option
+
+openport adds a click-through URL gate by default (open-for-ip-link). For SSH this
+is unnecessary — disable it via an environment file:
+
+```bash
+echo "OPTIONS=--ip-link-protection False" | sudo -S tee /etc/default/openport-22
+```
+
+This file is read automatically by the `openport@22.service` template unit.
+
+#### 12c — Enable and start the native systemd unit
+
+Use the template unit `openport@.service` with the instance `22` (the local port
+to expose). This runs as root, starts after `network.target`, and restarts on failure.
+
+```bash
+# Disable the sysv wrapper (unreliable on Trixie)
+echo sjcsjc | sudo -S systemctl disable openport
+
+# Enable and start the native template instance
+echo sjcsjc | sudo -S systemctl enable openport@22
+echo sjcsjc | sudo -S systemctl start openport@22
+
+# Verify the service came up
+sudo systemctl is-active openport@22
+# Expected: active
+
+# Get the public relay address
+echo sjcsjc | sudo -S openport list
+```
+
+Expected `openport list` output:
+```
+╭─────────────────────────────────────────────────────────────────────────────╮
+│ Active Openport Sessions                                                    │
+├────────────┬─────────────────┬─────────────┬──────────────────┬─────────┤
+│ Local Port │ Server          │ Remote Port │ Open-For-IP-Link │ Running │
+├────────────┼─────────────────┼─────────────┼──────────────────┼─────────┤
+│         22 │ spr.openport.io │       XXXXX │                  │ true    │
+╰────────────┴─────────────────┴─────────────┴──────────────────┴─────────╯
+```
+
+> Note the **Remote Port** — that is the public-facing port you SSH into.  
+> openport tries to reuse the same port for the same machine across reboots.
+
+#### 12d — Verify tunnel survives reboot
+
+```bash
+echo sjcsjc | sudo -S reboot
+```
+
+After ~60 seconds:
+
+```powershell
+# SSH through the tunnel from anywhere:
+ssh -i "$env:USERPROFILE\.ssh\id_ed25519_pis" -o IdentitiesOnly=yes -p REMOTE_PORT sjcN@spr.openport.io
+
+# Or check service + tunnel status via local ethernet:
+ssh ... 'sudo systemctl is-active openport@22 ; sudo openport list'
+```
+
+Expected:
+```
+active
+# + table showing Running = true, same Remote Port as before
+```
+
+#### 12e — Useful openport commands (run on Pi as root/sudo)
+
+```bash
+# List all active sessions and their public addresses
+echo sjcsjc | sudo -S openport list
+
+# Check service status
+sudo systemctl status openport@22 --no-pager
+
+# View service logs
+sudo journalctl -u openport@22 -n 50 --no-pager
+
+# Restart tunnel manually
+echo sjcsjc | sudo -S systemctl restart openport@22
+```
+
+#### Notes
+
+- **Port stability:** openport assigns a port per machine identity. The port should
+  remain the same across reboots but is not strictly guaranteed.
+- **Account registration:** `openport register <token>` requires a paid membership.
+  The free tier works without registration — tunnels function normally, but sessions
+  won't appear in the openport.io web dashboard.
+- **openport@.service template:** `%i` in the unit file expands to the instance name
+  (`22`). Environment options are loaded from `/etc/default/openport-22`.
+- **Do NOT use `openport restart-sessions`** via the sysv script — it runs before
+  the network is ready and silently fails on Trixie.
+
+---
+
 ## Useful Commands
 
 ### Check which script is running
@@ -333,6 +469,21 @@ pkill -f UNDERWATER_LIGTHING_LUX.py
 echo sjcsjc | sudo -S shutdown now
 ```
 
+### openport — check tunnel status
+```bash
+# As root (service runs as root)
+echo sjcsjc | sudo -S openport list
+# Shows: Local Port / Server / Remote Port / Running
+# SSH from anywhere: ssh -p REMOTE_PORT sjcN@spr.openport.io
+```
+
+### openport — restart tunnel after network change
+```bash
+echo sjcsjc | sudo -S systemctl restart openport@22
+sleep 5
+echo sjcsjc | sudo -S openport list  # confirm Running = true and note new port if changed
+```
+
 ---
 
 ## Progress Log
@@ -349,6 +500,10 @@ echo sjcsjc | sudo -S shutdown now
 - [x] Step 9 — Script deployed (UNDERWATER_LIGTHING_LUX.py)
 - [x] Step 10 — pytremor_lux service installed & enabled
 - [x] Step 11 — Verified after reboot: both services `active` ✔
+- [x] Step 12 — openport.io installed (`openport@22.service` enabled) ✔
+  - Public address: `ssh -p 19092 sjc1@spr.openport.io`
+  - ip-link-protection: disabled (`/etc/default/openport-22`)
+  - Survives reboot: confirmed ✔
 
 ### sjc2
 - [ ] Steps 1–11
@@ -374,3 +529,7 @@ echo sjcsjc | sudo -S shutdown now
 - **`pkill -9 -f python3` kills SSH session** — use `pkill -f SCRIPTNAME` instead
 - **sudo inline:** `echo sjcsjc | sudo -S COMMAND`
 - **pip on Debian Trixie** requires `--break-system-packages` for user installs outside venv
+- **openport sysv script starts too early** — the init.d/sysv wrapper (`openport.service`) runs at runlevel S01 before networking is ready; it appears `active` briefly then silently fails. Use the native systemd template unit `openport@22.service` instead
+- **openport `register` requires paid membership** — `openport register <token>` returns `membership not found for token`; free-tier tunnels work without registration but sessions won't appear on the openport.io dashboard
+- **openport sessions are per-user** — if you run `openport 22` as a non-root user the session is stored in that user's `~/.openport/` DB; `openport@22.service` runs as root and has its own DB. Always check with `sudo openport list` when using the systemd service
+- **Port numbers are semi-stable** — openport tries to reassign the same port per machine, but it may change if the server recycles it; always check `sudo openport list` after a long downtime
