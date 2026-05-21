@@ -24,12 +24,12 @@ PWM_FREQ   = 800    # Hz
 PWM_MAX    = 255    # full brightness
 PWM_DIM    = 30     # dim trail brightness
 
-SWEEP_DELAY    = 0.07   # seconds between sweep steps
+SWEEP_DELAY    = 0.12   # seconds between sweep steps (slower = more visible)
 SWEEP_PASSES   = 3      # number of full back-and-forth passes before breath
 BREATH_STEPS   = 200    # resolution of each breath cycle (higher = smoother)
 BREATH_PERIOD  = 2.5    # seconds for one full inhale + exhale
 BREATH_FLOOR   = 4      # minimum brightness during exhale (0 = fully off)
-BLACKOUT_SEC   = 2.0    # dark pause between phases
+BLACKOUT_SEC   = 1.5    # dark pause between phases
 
 
 def all_off(pi):
@@ -37,17 +37,23 @@ def all_off(pi):
         pi.set_PWM_dutycycle(pin, 0)
 
 
-def blackout(pi, label=None):
-    """Fade all LEDs to zero then hold a dark pause before the next phase."""
-    # Quick ramp down over ~0.4s so the transition is visible, not a snap
-    current = PWM_MAX
+def fade_down(pi):
+    """Quadratic fade from current brightness (assumed full) to zero over ~0.4s."""
     steps = 40
     for s in range(steps, -1, -1):
-        duty = int((s / steps) ** 2 * current)   # quadratic ease-out
+        duty = int((s / steps) ** 2 * PWM_MAX)
         for pin in ALL_PINS:
             pi.set_PWM_dutycycle(pin, duty)
         time.sleep(0.01)
     all_off(pi)
+
+
+def blackout(pi, fade=False, label=None):
+    """Pause in darkness between phases. Set fade=True only when coming from full brightness."""
+    if fade:
+        fade_down(pi)   # smooth ramp down — only call when LEDs are actually on
+    else:
+        all_off(pi)     # pins already off; just ensure clean state
     if label:
         print(f"  --- {label} ---")
     time.sleep(BLACKOUT_SEC)
@@ -81,8 +87,8 @@ def phase2_sweep(pi, passes=SWEEP_PASSES):
     for p in range(passes):
         for i, _ in enumerate(sequence):
             all_off(pi)
-            # Bright head with dimming tail
-            for offset, duty in [(-2, PWM_DIM // 2), (-1, PWM_DIM), (0, PWM_MAX), (1, PWM_DIM), (2, PWM_DIM // 2)]:
+            # One bright head + one dim neighbour on each side only
+            for offset, duty in [(-1, PWM_DIM), (0, PWM_MAX), (1, PWM_DIM)]:
                 idx = i + offset
                 if 0 <= idx < len(sequence):
                     pi.set_PWM_dutycycle(sequence[idx], duty)
@@ -91,28 +97,21 @@ def phase2_sweep(pi, passes=SWEEP_PASSES):
     all_off(pi)
 
 
-def phase3_breath(pi):
-    """Smooth sine-curve breath on all channels simultaneously until Ctrl+C."""
-    print("[Phase 3] Breath effect — Ctrl+C to stop\n")
+def phase3_breath(pi, cycles=5):
+    """Smooth sine-curve breath on all channels simultaneously for N cycles."""
+    print(f"[Phase 3] Breath effect — {cycles} cycles ...")
 
     step_delay = BREATH_PERIOD / BREATH_STEPS
     range_span  = PWM_MAX - BREATH_FLOOR
 
-    try:
-        cycle = 0
-        while True:
-            cycle += 1
-            for step in range(BREATH_STEPS):
-                # sin goes 0→1→0 over one half-period; use a full sin cycle mapped to 0..1
-                angle = (step / BREATH_STEPS) * math.pi  # 0 → π  (one breath in + out)
-                duty  = BREATH_FLOOR + int(math.sin(angle) * range_span)
-                for pin in ALL_PINS:
-                    pi.set_PWM_dutycycle(pin, duty)
-                time.sleep(step_delay)
-            # brief pause at the bottom between breaths
-            time.sleep(0.4)
-    except KeyboardInterrupt:
-        pass
+    for _ in range(cycles):
+        for step in range(BREATH_STEPS):
+            angle = (step / BREATH_STEPS) * math.pi
+            duty  = BREATH_FLOOR + int(math.sin(angle) * range_span)
+            for pin in ALL_PINS:
+                pi.set_PWM_dutycycle(pin, duty)
+            time.sleep(step_delay)
+        time.sleep(0.4)   # brief pause at the bottom between breaths
 
 
 def main():
@@ -125,15 +124,22 @@ def main():
     print("=== MONA Stone Speakers — LED Hardware Test ===")
     print(f"  MOSFET outputs : {LED_PINS}")
     print(f"  Warning LEDs   : {WARN_PINS}")
-    print()
+    print("  Looping phases 1 → 2 → 3 → 1 ...  Ctrl+C to stop\n")
 
     try:
         setup(pi)
-        phase1_all_on(pi)
-        blackout(pi, label="Phase 1 done — blackout")
-        phase2_sweep(pi)
-        blackout(pi, label="Phase 2 done — blackout")
-        phase3_breath(pi)
+        loop = 0
+        while True:
+            loop += 1
+            print(f"\n=== Loop {loop} ===")
+            phase1_all_on(pi)
+            blackout(pi, fade=True,  label="-- blackout --")
+            phase2_sweep(pi)
+            blackout(pi, fade=False, label="-- blackout --")
+            phase3_breath(pi)
+            blackout(pi, fade=False, label="-- blackout --")
+    except KeyboardInterrupt:
+        pass
     finally:
         print("\nCleaning up — all LEDs off.")
         all_off(pi)
