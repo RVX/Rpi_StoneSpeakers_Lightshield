@@ -66,6 +66,7 @@ def all_on(pi, duty=PWM_MAX):
 
 def setup(pi):
     for pin in ALL_PINS:
+        pi.set_pull_up_down(pin, pigpio.PUD_DOWN)   # hold gate LOW when no script driving it
         pi.set_PWM_frequency(pin, PWM_FREQ)
         pi.set_PWM_dutycycle(pin, 0)
 
