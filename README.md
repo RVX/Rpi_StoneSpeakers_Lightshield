@@ -6,6 +6,10 @@ The LED sequence plays a 30-step underwater tremor effect (varying brightness an
 
 Lux sensor code adapted from [Rpi_Lux_Monitor_BH1750_Oled](https://github.com/RVX/Rpi_Lux_Monitor_BH1750_Oled).
 
+![pyTREMOR_lights visualization](01_pyTREMOR_lights/pyTREMOR_lights01_visualization.png)
+
+*Latest seismic-to-light replay — see [01_pyTREMOR_lights/README.md](01_pyTREMOR_lights/README.md) for how to read the panels.*
+
 ---
 
 ## Repository structure

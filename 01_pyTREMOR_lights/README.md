@@ -7,6 +7,12 @@ flicker in response to ground motion measured at a remote seismometer
 (default: **IU.HNR.00.BHZ**, Honiara, Solomon Islands), streamed live over
 the FDSN web service from EarthScope.
 
+![Latest 60-min replay visualization](pyTREMOR_lights01_visualization.png)
+
+*Most recent 60 min of seismic data replayed at 5× through the current
+parameter set. See the embedded key panel at the bottom of the image for
+how to read it. Regenerate with `pyTREMOR_lights_visualize.py`.*
+
 ---
 
 ## Files
