@@ -2,7 +2,8 @@
 """
 test_all_leds.py — MONA Stone Speakers hardware test
   Phase 1: All LEDs full brightness for 3 seconds
-  Phase 2: Sequential sweep back and forth (Knight Rider) until Ctrl+C
+  Phase 2: Sequential sweep back and forth (Knight Rider) — 3 full passes
+  Phase 3: Breath effect — smooth sine ramp 0→max→0 on all channels, loops until Ctrl+C
 GPIO layout:
   LED outputs (MOSFETs): GPIO4, GPIO18, GPIO17, GPIO27, GPIO22, GPIO5, GPIO12, GPIO13
   Warning indicators:    GPIO26 (L1), GPIO19 (L2), GPIO6 (L3)
@@ -11,6 +12,7 @@ GPIO layout:
 import pigpio
 import time
 import sys
+import math
 
 # --- Pin definitions ---
 LED_PINS   = [4, 18, 17, 27, 22, 5, 12, 13]   # MOSFET outputs, OUT1–OUT8
@@ -22,12 +24,33 @@ PWM_FREQ   = 800    # Hz
 PWM_MAX    = 255    # full brightness
 PWM_DIM    = 30     # dim trail brightness
 
-SWEEP_DELAY = 0.07  # seconds between steps
+SWEEP_DELAY    = 0.07   # seconds between sweep steps
+SWEEP_PASSES   = 3      # number of full back-and-forth passes before breath
+BREATH_STEPS   = 200    # resolution of each breath cycle (higher = smoother)
+BREATH_PERIOD  = 2.5    # seconds for one full inhale + exhale
+BREATH_FLOOR   = 4      # minimum brightness during exhale (0 = fully off)
+BLACKOUT_SEC   = 2.0    # dark pause between phases
 
 
 def all_off(pi):
     for pin in ALL_PINS:
         pi.set_PWM_dutycycle(pin, 0)
+
+
+def blackout(pi, label=None):
+    """Fade all LEDs to zero then hold a dark pause before the next phase."""
+    # Quick ramp down over ~0.4s so the transition is visible, not a snap
+    current = PWM_MAX
+    steps = 40
+    for s in range(steps, -1, -1):
+        duty = int((s / steps) ** 2 * current)   # quadratic ease-out
+        for pin in ALL_PINS:
+            pi.set_PWM_dutycycle(pin, duty)
+        time.sleep(0.01)
+    all_off(pi)
+    if label:
+        print(f"  --- {label} ---")
+    time.sleep(BLACKOUT_SEC)
 
 
 def all_on(pi, duty=PWM_MAX):
@@ -41,32 +64,53 @@ def setup(pi):
         pi.set_PWM_dutycycle(pin, 0)
 
 
-def phase1_all_on(pi, duration=3.0):
+def phase1_all_on(pi, duration=4.0):
     """Light everything to maximum."""
     print(f"[Phase 1] All LEDs ON at 100% for {duration}s ...")
     all_on(pi, PWM_MAX)
     time.sleep(duration)
-    all_off(pi)
-    time.sleep(0.3)
 
 
-def phase2_sweep(pi):
-    """Knight Rider sweep across all 11 channels, back and forth."""
-    print("[Phase 2] Sequential sweep — press Ctrl+C to stop\n")
+def phase2_sweep(pi, passes=SWEEP_PASSES):
+    """Knight Rider sweep across all 11 channels, back and forth for N passes."""
+    print(f"[Phase 2] Sequential sweep — {passes} pass(es) ...")
 
     # Build the full sweep sequence: forward then reverse (no repeat of endpoints)
     sequence = ALL_PINS + ALL_PINS[-2:0:-1]
 
+    for p in range(passes):
+        for i, _ in enumerate(sequence):
+            all_off(pi)
+            # Bright head with dimming tail
+            for offset, duty in [(-2, PWM_DIM // 2), (-1, PWM_DIM), (0, PWM_MAX), (1, PWM_DIM), (2, PWM_DIM // 2)]:
+                idx = i + offset
+                if 0 <= idx < len(sequence):
+                    pi.set_PWM_dutycycle(sequence[idx], duty)
+            time.sleep(SWEEP_DELAY)
+
+    all_off(pi)
+
+
+def phase3_breath(pi):
+    """Smooth sine-curve breath on all channels simultaneously until Ctrl+C."""
+    print("[Phase 3] Breath effect — Ctrl+C to stop\n")
+
+    step_delay = BREATH_PERIOD / BREATH_STEPS
+    range_span  = PWM_MAX - BREATH_FLOOR
+
     try:
+        cycle = 0
         while True:
-            for i, active_pin in enumerate(sequence):
-                all_off(pi)
-                # Dim the neighbours for a tail effect
-                for offset, duty in [(-2, PWM_DIM // 2), (-1, PWM_DIM), (0, PWM_MAX), (1, PWM_DIM), (2, PWM_DIM // 2)]:
-                    idx = i + offset
-                    if 0 <= idx < len(sequence):
-                        pi.set_PWM_dutycycle(sequence[idx], duty)
-                time.sleep(SWEEP_DELAY)
+            cycle += 1
+            for step in range(BREATH_STEPS):
+                # sin goes 0→1→0 over one half-period; use a full sin cycle mapped to 0..1
+                angle = (step / BREATH_STEPS) * math.pi  # 0 → π  (one breath in + out)
+                duty  = BREATH_FLOOR + int(math.sin(angle) * range_span)
+                for pin in ALL_PINS:
+                    pi.set_PWM_dutycycle(pin, duty)
+                time.sleep(step_delay)
+            # brief pause at the bottom between breaths
+            time.sleep(0.4)
     except KeyboardInterrupt:
         pass
 
@@ -85,8 +129,11 @@ def main():
 
     try:
         setup(pi)
-        phase1_all_on(pi, duration=3.0)
+        phase1_all_on(pi)
+        blackout(pi, label="Phase 1 done — blackout")
         phase2_sweep(pi)
+        blackout(pi, label="Phase 2 done — blackout")
+        phase3_breath(pi)
     finally:
         print("\nCleaning up — all LEDs off.")
         all_off(pi)
