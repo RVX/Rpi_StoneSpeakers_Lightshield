@@ -120,72 +120,132 @@ def tail_thread(ssh_dest, q, stop_event):
 
 
 # ----------------------------------------------------------------------------
-# Live UI
+# Live UI — soft, low-contrast palette designed to be easy on the eyes
 # ----------------------------------------------------------------------------
+BG_COLOR     = "#161a22"   # warm near-black
+PANEL_COLOR  = "#1d222c"   # slightly lifted panel fill
+GRID_COLOR   = "#2c3340"
+TEXT_PRIMARY = "#e6dccb"   # warm cream
+TEXT_MUTED   = "#9aa0a9"   # cool gray
+ACCENT       = "#f0c987"   # soft amber for the centroid line
+
+# Soft 8-step palette for the LED bars — sunset → sea, all desaturated
+BAR_PALETTE = [
+    "#e2a8a8",  # dusty rose
+    "#eac49a",  # soft peach
+    "#e8d6a1",  # warm sand
+    "#cdd6a4",  # pale moss
+    "#a9d0b6",  # sage
+    "#9ec8c8",  # soft teal
+    "#a8bcd6",  # dusty blue
+    "#b9aed3",  # lavender
+]
+
+# Custom soft waterfall colormap (deep indigo → mauve → coral → cream)
+SOFT_CMAP = matplotlib.colors.LinearSegmentedColormap.from_list(
+    "soft_tremor",
+    [
+        (0.00, "#1a1d2a"),
+        (0.20, "#332e44"),
+        (0.45, "#7a5773"),
+        (0.65, "#c08272"),
+        (0.85, "#e6b58c"),
+        (1.00, "#f4e1c5"),
+    ],
+)
+
+
+def _style_axes(ax):
+    ax.set_facecolor(PANEL_COLOR)
+    for spine in ax.spines.values():
+        spine.set_color(GRID_COLOR)
+        spine.set_linewidth(0.8)
+    ax.tick_params(colors=TEXT_MUTED, labelsize=8, length=3)
+    ax.title.set_color(TEXT_PRIMARY)
+    ax.xaxis.label.set_color(TEXT_MUTED)
+    ax.yaxis.label.set_color(TEXT_MUTED)
+
+
 def run_ui(q):
-    plt.style.use("dark_background")
-    fig = plt.figure(figsize=(13, 7))
+    fig = plt.figure(figsize=(13, 7), facecolor=BG_COLOR)
     fig.canvas.manager.set_window_title("pyTREMOR · live monitor")
     gs = fig.add_gridspec(
         3, 2,
         width_ratios=[1.0, 1.6],
         height_ratios=[1.0, 1.0, 0.18],
-        hspace=0.35, wspace=0.25,
+        hspace=0.42, wspace=0.22,
+        left=0.06, right=0.97, top=0.93, bottom=0.08,
     )
     ax_bars   = fig.add_subplot(gs[0:2, 0])
     ax_water  = fig.add_subplot(gs[0,   1])
     ax_cen    = fig.add_subplot(gs[1,   1])
     ax_status = fig.add_subplot(gs[2, :])
+    ax_status.set_facecolor(BG_COLOR)
     ax_status.axis("off")
+    for ax in (ax_bars, ax_water, ax_cen):
+        _style_axes(ax)
 
     # --- bars panel --------------------------------------------------------
-    bar_colors = plt.cm.plasma(np.linspace(0.05, 0.95, 8))
-    band_labels = [
-        f"{BAND_EDGES[i]:.1f}–{BAND_EDGES[i+1]:.1f} Hz"
-        for i in range(8)
-    ]
-    bars = ax_bars.bar(range(8), [0]*8, color=bar_colors, edgecolor="white", linewidth=0.5)
+    band_labels = [f"{BAND_EDGES[i]:.1f}–{BAND_EDGES[i+1]:.1f} Hz" for i in range(8)]
+    bars = ax_bars.bar(
+        range(8), [0]*8,
+        color=BAR_PALETTE,
+        edgecolor=BG_COLOR, linewidth=1.2,
+        width=0.72,
+    )
     ax_bars.set_ylim(0, 100)
     ax_bars.set_xticks(range(8))
-    ax_bars.set_xticklabels([f"LED{i+1}\n{band_labels[i]}" for i in range(8)],
-                            fontsize=8, color="lightgray")
-    ax_bars.set_ylabel("Brightness  (%)", color="lightgray")
-    ax_bars.set_title("Current LED output", color="white", fontsize=11)
-    ax_bars.grid(axis="y", alpha=0.2)
+    ax_bars.set_xticklabels(
+        [f"LED{i+1}\n{band_labels[i]}" for i in range(8)],
+        fontsize=8, color=TEXT_MUTED,
+    )
+    ax_bars.set_ylabel("brightness  (%)", color=TEXT_MUTED, fontsize=9)
+    ax_bars.set_title("current LED output", color=TEXT_PRIMARY,
+                      fontsize=11, pad=10, fontweight="light")
+    ax_bars.grid(axis="y", color=GRID_COLOR, alpha=0.6, linewidth=0.6)
+    ax_bars.set_axisbelow(True)
 
     # --- waterfall panel ---------------------------------------------------
-    waterfall = np.zeros((8, HISTORY_FRAMES), dtype=np.float32)
+    waterfall = np.full((8, HISTORY_FRAMES), np.nan, dtype=np.float32)
     im = ax_water.imshow(
         waterfall, aspect="auto", origin="lower",
-        cmap="plasma", vmin=0, vmax=100,
+        cmap=SOFT_CMAP, vmin=0, vmax=100,
         extent=[-HISTORY_SEC, 0, 0.5, 8.5],
+        interpolation="bilinear",
     )
     ax_water.set_yticks(range(1, 9))
-    ax_water.set_yticklabels([f"L{i+1}" for i in range(8)], color="lightgray", fontsize=8)
-    ax_water.set_xlabel("seconds ago", color="lightgray")
-    ax_water.set_title("Per-band history (60 s)", color="white", fontsize=11)
-    cbar = fig.colorbar(im, ax=ax_water, fraction=0.04, pad=0.02)
-    cbar.set_label("%", color="lightgray")
-    cbar.ax.yaxis.set_tick_params(color="lightgray")
-    plt.setp(cbar.ax.get_yticklabels(), color="lightgray")
+    ax_water.set_yticklabels([f"L{i+1}" for i in range(8)],
+                             color=TEXT_MUTED, fontsize=8)
+    ax_water.set_xlabel("seconds ago", color=TEXT_MUTED, fontsize=9)
+    ax_water.set_title("per-band history  ·  60 s waterfall",
+                       color=TEXT_PRIMARY, fontsize=11, pad=10, fontweight="light")
+    cbar = fig.colorbar(im, ax=ax_water, fraction=0.035, pad=0.015)
+    cbar.outline.set_edgecolor(GRID_COLOR)
+    cbar.ax.tick_params(colors=TEXT_MUTED, labelsize=8, length=2)
+    cbar.set_label("%", color=TEXT_MUTED, fontsize=8)
 
     # --- centroid panel ----------------------------------------------------
     cen_hist = deque([np.nan] * HISTORY_FRAMES, maxlen=HISTORY_FRAMES)
     t_axis = np.linspace(-HISTORY_SEC, 0, HISTORY_FRAMES)
-    (cen_line,) = ax_cen.plot(t_axis, list(cen_hist), color="#39ff14", lw=1.4)
+    (cen_line,) = ax_cen.plot(t_axis, list(cen_hist), color=ACCENT, lw=1.6, alpha=0.95)
+    # subtle band-edge guidelines on the centroid plot
+    for edge in BAND_EDGES[1:-1]:
+        ax_cen.axhline(edge, color=GRID_COLOR, lw=0.5, alpha=0.6)
     ax_cen.set_ylim(BAND_EDGES[0], BAND_EDGES[-1])
     ax_cen.set_xlim(-HISTORY_SEC, 0)
-    ax_cen.set_xlabel("seconds ago", color="lightgray")
-    ax_cen.set_ylabel("centroid  (Hz)", color="lightgray")
-    ax_cen.set_title("Spectral centroid → drives PWM frequency", color="white", fontsize=11)
-    ax_cen.grid(alpha=0.2)
+    ax_cen.set_xlabel("seconds ago", color=TEXT_MUTED, fontsize=9)
+    ax_cen.set_ylabel("centroid  (Hz)", color=TEXT_MUTED, fontsize=9)
+    ax_cen.set_title("spectral centroid  →  PWM frequency",
+                     color=TEXT_PRIMARY, fontsize=11, pad=10, fontweight="light")
+    ax_cen.grid(color=GRID_COLOR, alpha=0.4, linewidth=0.6)
+    ax_cen.set_axisbelow(True)
 
     # --- status text -------------------------------------------------------
     status_txt = ax_status.text(
-        0.01, 0.5, "Waiting for first frame…",
+        0.01, 0.5, "waiting for first frame…",
         transform=ax_status.transAxes,
         ha="left", va="center",
-        fontsize=11, color="white", family="monospace",
+        fontsize=10.5, color=TEXT_PRIMARY, family="monospace", alpha=0.9,
     )
 
     # --- shared state ------------------------------------------------------
