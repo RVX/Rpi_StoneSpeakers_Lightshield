@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 test_all_leds.py — MONA Stone Speakers hardware test

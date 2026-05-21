@@ -4,127 +4,105 @@
 
 import pigpio
 import time
-import threading
+import signal
 from datetime import datetime
 
-# Initialize pigpio
-pi = pigpio.pi()
+# GPIO pins — OUT1 to OUT8 in order
+LED_PINS = [4, 18, 17, 27, 22, 5, 12, 13]
 
-# Define the GPIO pins for LEDs (GPIO12, GPIO13, GPIO19, GPIO17, GPIO27, GPIO22)
-LED_PINS = [12, 13, 17, 19, 27, 22]
+# Sequences: brightness (0–100%), frequency (Hz), duration (seconds) per step
+BRIGHTNESS_SEQ = [ 25,  15,  15,   8,  10,   9,   8,   6,  25,   5,  17,   8,  11,  14,  19,   9,  16,  13,   8,  18,   8,   9,  20,   5,   6,   7,  12,   9,   8,   3]
+FREQUENCY_SEQ  = [800, 800, 800, 750, 700, 600, 500, 600, 180, 700, 600, 400, 450, 650, 550, 750, 800, 600, 500, 300, 400, 250, 150, 200, 300, 400, 500, 600, 700, 800]
+TIMING_SEQ     = [ 10,   5,   8,  15,  12,   7,  10,   9,  12,   4,   9,  10,   6,  11,  10,   5,  12,   8,   4,   6,   5,  11,  12,   9,  16,   9,  10,  12,   7,   9]
 
-# Set initial PWM frequency and duty cycle
-pwm_frequency = 500  # Set initial PWM frequency to 500 Hz
-brightness = 25  # Start with lowest brightness (25%)
-running = True
+MIN_BRIGHTNESS  = 0
+MAX_BRIGHTNESS  = 100
+MIN_FREQUENCY   = 170
+MAX_FREQUENCY   = 800
+UPDATE_INTERVAL = 0.05   # seconds between PWM updates (~20 Hz refresh)
 
-# Custom brightness sequence (non-linear, hard-coded)
-brightness_sequence = [25, 15, 15, 8, 10, 9, 8, 6, 25, 5, 17, 8, 11, 14, 19, 9, 16, 13, 8, 18, 8, 9, 20, 5, 6, 7, 12, 9, 8, 3]
 
-# Custom timing sequence (in seconds, hard-coded)
-timing_sequence = [10, 5, 8, 15, 12, 7, 10, 9, 12, 4, 9, 10, 6, 11, 10, 5, 12, 8, 4, 6, 5, 11, 12, 9, 16, 9, 10, 12, 7, 9]
-
-# Custom frequency sequence to correspond to brightness steps (hard-coded)
-frequency_sequence = [800, 800, 800, 750, 700, 600, 500, 600, 180, 700, 600, 400, 450, 650, 550, 750, 800, 600, 500, 300, 400, 250, 150, 200, 300, 400, 500, 600, 700, 800]
-
-# Minimum and maximum limits
-MIN_BRIGHTNESS = 5  # Minimum brightness
-MAX_BRIGHTNESS = 25  # Maximum brightness
-MIN_FREQUENCY = 170  # Minimum frequency
-MAX_FREQUENCY = 800  # Maximum frequency
-
-# Nonlinear easing function for brightness and frequency
 def ease_in_out(t):
-    """Nonlinear easing function."""
-    if t < 0.5:
-        return 2 * t ** 2
-    else:
-        return -1 + (4 - 2 * t) * t
+    return 2 * t * t if t < 0.5 else -1 + (4 - 2 * t) * t
 
-# Function to handle strobe effect with high-frequency PWM
-def strobe_effect():
-    while running:
-        for pin in LED_PINS:
-            pi.set_PWM_frequency(pin, pwm_frequency)  # Set the PWM frequency for each pin
-            pi.set_PWM_dutycycle(pin, int(brightness * 2.55))  # Adjust brightness (0-255 for pigpio)
-        time.sleep(0.001)  # Delay to create strobe effect
 
-        for pin in LED_PINS:
-            pi.set_PWM_dutycycle(pin, 0)  # Turn off LED
-        time.sleep(0.001)  # Delay to create strobe effect
-
-# Function to run the brightness and frequency sequences continuously
-def run_sequence():
-    global brightness, pwm_frequency
-    num_steps = min(len(brightness_sequence), len(timing_sequence), len(frequency_sequence))
-
-    while running:  # Loop to restart the sequence
-        for step in range(num_steps):
-            target_brightness = brightness_sequence[step]
-            target_frequency = frequency_sequence[step]
-            duration = timing_sequence[step]
-
-            print(f"\n--- Step {step + 1}/{num_steps} ---")
-            print(f"Target Brightness: {target_brightness}%, Target Frequency: {target_frequency}Hz, Duration: {duration}s")
-
-            # Brightness and Frequency Transition
-            start_brightness = brightness
-            start_frequency = pwm_frequency
-            start_time = time.time()
-            
-            while time.time() - start_time < duration:
-                # Calculate progress
-                elapsed = time.time() - start_time
-                progress = min(elapsed / duration, 1)  # Ensure progress does not exceed 1
-
-                # Ease in/out brightness
-                brightness = start_brightness + (target_brightness - start_brightness) * ease_in_out(progress)
-                brightness = max(MIN_BRIGHTNESS, min(MAX_BRIGHTNESS, brightness))  # Clamp brightness
-
-                # Ease in/out frequency
-                pwm_frequency = start_frequency + (target_frequency - start_frequency) * ease_in_out(progress)
-                pwm_frequency = max(MIN_FREQUENCY, min(MAX_FREQUENCY, int(pwm_frequency)))  # Clamp frequency
-                
-                # Apply the new brightness and frequency
-                for pin in LED_PINS:
-                    pi.set_PWM_dutycycle(pin, int(brightness * 2.55))  # Adjust LED duty cycle
-                    pi.set_PWM_frequency(pin, int(pwm_frequency))  # Set frequency
-                
-                # Print current brightness and frequency
-                print(f"\r[{datetime.now().strftime('%H:%M:%S')}]: Brightness: {int(brightness)}%, Frequency: {pwm_frequency}Hz", end='')
-
-                time.sleep(0.05)  # Update every 50 ms
-
-            # Final adjustment
-            brightness = target_brightness  # Ensure final value is set
-            pwm_frequency = target_frequency  # Ensure final frequency is set
-            for pin in LED_PINS:
-                pi.set_PWM_dutycycle(pin, int(brightness * 2.55))  # Set to final brightness
-                pi.set_PWM_frequency(pin, int(pwm_frequency))  # Set to final frequency
-            
-            # Print final status for this step
-            print(f"\nFinal Brightness: {int(brightness)}%, Frequency: {pwm_frequency}Hz")
-
-# Ensure failsafe mechanism: Set LEDs to 25% brightness and 800Hz if the script fails or stops
-def failsafe_mode():
-    print("\nSetting failsafe mode: 25% brightness and 800Hz")
+def set_all(pi, brightness, freq):
+    """Apply brightness (0–100%) and frequency to all pins at once."""
+    dc = max(0,             min(255,           int(brightness * 2.55)))
+    f  = max(MIN_FREQUENCY, min(MAX_FREQUENCY, int(freq)))
     for pin in LED_PINS:
-        pi.set_PWM_dutycycle(pin, int(25 * 2.55))  # Set brightness to 25%
-        pi.set_PWM_frequency(pin, 800)  # Set frequency to 800Hz
+        pi.set_PWM_frequency(pin, f)
+        pi.set_PWM_dutycycle(pin, dc)
+
+
+def failsafe(pi):
+    """Museum failsafe: leave all outputs at 25% / 800Hz on any stop."""
+    print("\nFailsafe: 25% brightness, 800Hz on all outputs.")
+    for pin in LED_PINS:
+        pi.set_PWM_frequency(pin, 800)
+        pi.set_PWM_dutycycle(pin, int(25 * 2.55))
+
+
+def run(pi):
+    steps      = min(len(BRIGHTNESS_SEQ), len(FREQUENCY_SEQ), len(TIMING_SEQ))
+    brightness = float(BRIGHTNESS_SEQ[0])
+    freq       = float(FREQUENCY_SEQ[0])
+
+    print(f"=== UNDERWATER LIGHTING — {steps} steps, looping ===")
+    print(f"    Outputs : {LED_PINS}")
+    print(f"    Range   : {MIN_BRIGHTNESS}% – {MAX_BRIGHTNESS}%\n")
+
+    while True:
+        for step in range(steps):
+            target_b = float(BRIGHTNESS_SEQ[step])
+            target_f = float(FREQUENCY_SEQ[step])
+            duration = TIMING_SEQ[step]
+
+            print(f"\n--- Step {step+1}/{steps} | {int(target_b)}%  {int(target_f)}Hz  {duration}s ---")
+
+            start_b    = brightness
+            start_f    = freq
+            start_time = time.monotonic()
+
+            while True:
+                elapsed = time.monotonic() - start_time
+                if elapsed >= duration:
+                    break
+                e = ease_in_out(elapsed / duration)
+
+                brightness = max(MIN_BRIGHTNESS, min(MAX_BRIGHTNESS,
+                                 start_b + (target_b - start_b) * e))
+                freq       = max(MIN_FREQUENCY,  min(MAX_FREQUENCY,
+                                 start_f + (target_f - start_f) * e))
+
+                set_all(pi, brightness, freq)
+                print(f"\r[{datetime.now().strftime('%H:%M:%S')}]  "
+                      f"{int(brightness):3d}%   {int(freq):4d} Hz", end='', flush=True)
+                time.sleep(UPDATE_INTERVAL)
+
+            # Snap to exact target values at end of step
+            brightness = target_b
+            freq       = target_f
+            set_all(pi, brightness, freq)
+            print(f"\r[{datetime.now().strftime('%H:%M:%S')}]  "
+                  f"{int(brightness):3d}%   {int(freq):4d} Hz  done")
+
+
+def _sigterm(signum, frame):
+    raise KeyboardInterrupt
+
+
+signal.signal(signal.SIGTERM, _sigterm)
 
 if __name__ == "__main__":
+    pi = pigpio.pi()
+    if not pi.connected:
+        raise RuntimeError("Cannot connect to pigpiod — is the daemon running?")
     try:
-        # Start strobing in a separate thread
-        strobe_thread = threading.Thread(target=strobe_effect)
-        strobe_thread.start()
-
-        # Start the sequence automatically without menu interaction
-        run_sequence()
-
+        run(pi)
+    except KeyboardInterrupt:
+        pass
     finally:
-        # Set failsafe mode when script stops or fails
-        failsafe_mode()
-        running = False
-        strobe_thread.join()  # Ensure the strobe thread is terminated
-        pi.stop()  # Stop the pigpio daemon
+        failsafe(pi)
+        pi.stop()
 
