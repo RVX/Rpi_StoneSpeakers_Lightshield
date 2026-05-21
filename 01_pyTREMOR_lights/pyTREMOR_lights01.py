@@ -30,7 +30,7 @@ LED_PINS = [4, 18, 17, 27, 22, 5, 12, 13]   # OUT1 – OUT8
 
 MIN_BRIGHTNESS  = 0
 MAX_BRIGHTNESS  = 100
-MIN_FREQUENCY   = 170
+MIN_FREQUENCY   = 100
 MAX_FREQUENCY   = 800
 UPDATE_INTERVAL = 0.05    # seconds between PWM writes (~20 Hz visual refresh)
 
@@ -56,13 +56,13 @@ BANDPASS_MAX    = 18.0      # Hz — pyTREMOR default for 40 sps BHZ
 
 # --- Mapping ------------------------------------------------------------------
 SPEED_FACTOR    = 5.0       # 1.0 = real time; 5.0 = 5x faster
-SMOOTH_TAU      = 0.30      # exponential smoothing for per-band brightness (s)
+SMOOTH_TAU      = 0.12      # exponential smoothing for per-band brightness (s)
 SPECTRUM_WIN    = 1.0       # seconds of seismic data per spectrum frame
-BURST_SIGMA     = 3.0       # transient flash threshold: mean + N·σ
+BURST_SIGMA     = 4.0       # transient flash threshold: mean + N·σ
 BURST_MIN_GAP   = 2.0       # seconds between consecutive flashes
-BURST_DURATION  = 0.18      # how long the bright flash holds
-BASE_BRIGHTNESS = 8         # minimum % brightness so installation is never fully dark
-GAIN            = 6.0       # overall sensitivity multiplier on per-band level
+BURST_DURATION  = 0.35      # how long the bright flash holds
+BASE_BRIGHTNESS = 2         # minimum % brightness so installation is never fully dark
+GAIN            = 12.0      # overall sensitivity multiplier on per-band level
 # ------------------------------------------------------------------------------
 
 
