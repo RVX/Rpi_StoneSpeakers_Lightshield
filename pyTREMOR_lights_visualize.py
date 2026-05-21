@@ -31,6 +31,24 @@ import pyTREMOR_lights01 as cfg
 
 OUTPUT_PNG = "pyTREMOR_lights01_visualization.png"
 
+# Skip the first N seconds of the cache for *display only* — the zero-phase
+# bandpass filter rings hard at the edges and produces a huge spike that
+# dominates the y-axis. The main script does the same for playback.
+DISPLAY_SKIP_SEC = 30.0
+
+# Dark theme palette
+BG          = "#000000"
+FG          = "#e8e8e8"
+GRID        = "#333333"
+WAVE_COLOR  = "#9ad7ff"
+MU_COLOR    = "#ffb347"
+THR_COLOR   = "#ff5050"
+RMS_COLOR   = "#e8e8e8"
+BURST_COLOR = "#ff3030"
+EDGE_COLOR  = "#00e5ff"
+CENT_COLOR  = "#7fc7ff"
+PWM_COLOR   = "#ff6b6b"
+
 
 def fetch():
     client = Client(cfg.FDSN_BASE, timeout=60)
@@ -151,8 +169,24 @@ def replay(data, sr):
 
 
 def plot(data, sr, station, starttime, peak, ts):
-    t_wave = np.arange(len(data)) / sr
+    # Trim the first DISPLAY_SKIP_SEC for display only — bandpass edge ringing
+    skip = int(DISPLAY_SKIP_SEC * sr)
+    data_disp = data[skip:]
+    t_wave = (np.arange(len(data_disp)) + skip) / sr
     n_bands = len(cfg.LED_PINS)
+
+    plt.rcParams.update({
+        "axes.facecolor":    BG,
+        "figure.facecolor":  BG,
+        "savefig.facecolor": BG,
+        "axes.edgecolor":    FG,
+        "axes.labelcolor":   FG,
+        "xtick.color":       FG,
+        "ytick.color":       FG,
+        "text.color":        FG,
+        "axes.titlecolor":   FG,
+        "grid.color":        GRID,
+    })
 
     fig = plt.figure(figsize=(16, 14))
     gs  = gridspec.GridSpec(5, 1, height_ratios=[1.0, 1.4, 2.6, 1.0, 1.0],
@@ -161,37 +195,40 @@ def plot(data, sr, station, starttime, peak, ts):
     title = (f"pyTREMOR_lights01 — {station[0]}.{station[1]}.{station[2]}.{station[3]}"
              f"   |   {cfg.FETCH_HOURS*60:.0f} min ending {starttime + len(data)/sr}"
              f"   |   replay {cfg.SPEED_FACTOR}×   raw peak abs={peak:.2g}")
-    fig.suptitle(title, fontsize=12)
+    fig.suptitle(title, fontsize=12, color=FG)
 
     # 1. Raw bandpass-filtered waveform (display y-clipped at 99.5th percentile
-    #    so a single large transient doesn't squash the whole trace)
+    #    so a single large transient doesn't squash the whole trace).
+    #    x-axis in seconds, formatted as minutes — must match panel 2 because
+    #    they share x.
     ax0 = fig.add_subplot(gs[0])
-    ax0.plot(t_wave / 60, data, lw=0.4, color="#222")
-    ax0.set_xlim(0, t_wave[-1] / 60)
-    ylim = float(np.percentile(np.abs(data), 99.5)) * 1.4 or 1.0
+    ax0.plot(t_wave, data_disp, lw=0.4, color=WAVE_COLOR)
+    ax0.set_xlim(t_wave[0], t_wave[-1])
+    ylim = float(np.percentile(np.abs(data_disp), 99.5)) * 1.4 or 1.0
     ax0.set_ylim(-ylim, ylim)
     ax0.set_ylabel("Bandpass\nwaveform\n(normalised)")
     ax0.set_xlabel("")
     ax0.grid(alpha=0.3)
-    # mark bursts in real-seismic minutes (data minutes = replay_minutes * SPEED_FACTOR)
+    # mark bursts in real-seismic seconds (replay_seconds * SPEED_FACTOR)
     for bt in ts["bursts"]:
-        ax0.axvline(bt * cfg.SPEED_FACTOR / 60, color="red", alpha=0.4, lw=0.6)
+        ax0.axvline(bt * cfg.SPEED_FACTOR, color=BURST_COLOR, alpha=0.55, lw=0.6)
 
-    # 2. Spectrogram (1–18 Hz)
+    # 2. Spectrogram (1–18 Hz) — x in seconds, formatted as minutes
     ax1 = fig.add_subplot(gs[1], sharex=ax0)
     NFFT = int(sr * 4)
-    Pxx, freqs, bins, im = ax1.specgram(data, NFFT=NFFT, Fs=sr,
+    Pxx, freqs, bins, im = ax1.specgram(data_disp, NFFT=NFFT, Fs=sr,
                                         noverlap=NFFT // 2,
                                         cmap="inferno",
-                                        xextent=(0, t_wave[-1]))
+                                        xextent=(t_wave[0], t_wave[-1]))
     ax1.set_ylim(cfg.BANDPASS_MIN, cfg.BANDPASS_MAX)
-    # x axis in minutes
-    ax1.set_xticks(np.linspace(0, t_wave[-1], 7))
-    ax1.set_xticklabels([f"{x/60:.0f}" for x in np.linspace(0, t_wave[-1], 7)])
+    xticks = np.linspace(t_wave[0], t_wave[-1], 7)
+    ax1.set_xticks(xticks)
+    ax1.set_xticklabels([f"{x/60:.0f}" for x in xticks])
+    ax1.set_xlabel("Real-seismic time (minutes)")
     ax1.set_ylabel("Spectrogram\nfreq (Hz)")
     # overlay band edges
     for e in ts["edges"]:
-        ax1.axhline(e, color="cyan", alpha=0.4, lw=0.5, ls=":")
+        ax1.axhline(e, color=EDGE_COLOR, alpha=0.45, lw=0.5, ls=":")
 
     # 3. 8 LED brightness traces (stacked)
     ax2 = fig.add_subplot(gs[2])
@@ -203,14 +240,14 @@ def plot(data, sr, station, starttime, peak, ts):
     for i in range(n_bands):
         y = ts["bright"][i] + i * offset
         ax2.fill_between(t_replay_min, i*offset, y, color=cmap(i/(n_bands-1)),
-                         alpha=0.7, lw=0)
+                         alpha=0.75, lw=0)
         ax2.plot(t_replay_min, y, color=cmap(i/(n_bands-1)), lw=0.8)
         label = f"LED{i+1}  {edges[i]:.1f}–{edges[i+1]:.1f} Hz  (pin {cfg.LED_PINS[i]})"
         ax2.text(0.002 * t_replay_min[-1], i*offset + offset*0.55, label,
-                 fontsize=8, color="black",
-                 bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.7))
+                 fontsize=8, color=FG,
+                 bbox=dict(boxstyle="round,pad=0.15", fc="#111111", ec="none", alpha=0.75))
     for bt in ts["bursts"]:
-        ax2.axvline(bt/60, color="red", alpha=0.5, lw=0.7)
+        ax2.axvline(bt/60, color=BURST_COLOR, alpha=0.55, lw=0.7)
     ax2.set_ylim(0, n_bands * offset)
     ax2.set_xlim(0, t_replay_min[-1])
     ax2.set_yticks([])
@@ -220,28 +257,31 @@ def plot(data, sr, station, starttime, peak, ts):
 
     # 4. Centroid + PWM frequency
     ax3 = fig.add_subplot(gs[3], sharex=ax2)
-    ax3.plot(t_replay_min, ts["centroid"], color="#1f77b4", lw=0.8, label="centroid (Hz)")
-    ax3.set_ylabel("Centroid (Hz)", color="#1f77b4")
-    ax3.tick_params(axis='y', labelcolor="#1f77b4")
+    ax3.plot(t_replay_min, ts["centroid"], color=CENT_COLOR, lw=0.8, label="centroid (Hz)")
+    ax3.set_ylabel("Centroid (Hz)", color=CENT_COLOR)
+    ax3.tick_params(axis='y', labelcolor=CENT_COLOR)
     ax3.set_ylim(cfg.BANDPASS_MIN, cfg.BANDPASS_MAX)
     ax3b = ax3.twinx()
-    ax3b.plot(t_replay_min, ts["pwm"], color="#d62728", lw=0.6, alpha=0.7, label="PWM Hz")
+    ax3b.plot(t_replay_min, ts["pwm"], color=PWM_COLOR, lw=0.6, alpha=0.85, label="PWM Hz")
     ax3b.set_ylim(cfg.MIN_FREQUENCY, cfg.MAX_FREQUENCY)
-    ax3b.set_ylabel("PWM freq (Hz)", color="#d62728")
-    ax3b.tick_params(axis='y', labelcolor="#d62728")
+    ax3b.set_ylabel("PWM freq (Hz)", color=PWM_COLOR)
+    ax3b.tick_params(axis='y', labelcolor=PWM_COLOR)
+    ax3b.spines["top"].set_color(FG)
+    ax3b.spines["right"].set_color(FG)
     ax3.grid(alpha=0.3)
 
     # 5. RMS + burst threshold
     ax4 = fig.add_subplot(gs[4], sharex=ax2)
-    ax4.plot(t_replay_min, ts["rms"], color="black", lw=0.7, label="RMS")
-    ax4.plot(t_replay_min, ts["mu"], color="orange", lw=0.6, label="running mean")
-    ax4.plot(t_replay_min, ts["thr"], color="red", lw=0.6, ls="--",
+    ax4.plot(t_replay_min, ts["rms"], color=RMS_COLOR, lw=0.7, label="RMS")
+    ax4.plot(t_replay_min, ts["mu"],  color=MU_COLOR,  lw=0.6, label="running mean")
+    ax4.plot(t_replay_min, ts["thr"], color=THR_COLOR, lw=0.6, ls="--",
              label=f"burst threshold (μ + {cfg.BURST_SIGMA:.1f}σ)")
     for bt in ts["bursts"]:
-        ax4.axvline(bt/60, color="red", alpha=0.5, lw=0.7)
+        ax4.axvline(bt/60, color=BURST_COLOR, alpha=0.55, lw=0.7)
     ax4.set_ylabel("RMS")
     ax4.set_xlabel("Replay time (minutes)")
-    ax4.legend(loc="upper right", fontsize=8)
+    leg = ax4.legend(loc="upper right", fontsize=8, facecolor="#111111",
+                     edgecolor=GRID, labelcolor=FG)
     ax4.grid(alpha=0.3)
 
     footer = (f"GAIN={cfg.GAIN}   BASE_BRIGHTNESS={cfg.BASE_BRIGHTNESS}   "
@@ -249,10 +289,11 @@ def plot(data, sr, station, starttime, peak, ts):
               f"SPEED={cfg.SPEED_FACTOR}×   "
               f"BURST_SIGMA={cfg.BURST_SIGMA}   BURST_MIN_GAP={cfg.BURST_MIN_GAP}s   "
               f"PWM range {cfg.MIN_FREQUENCY}–{cfg.MAX_FREQUENCY} Hz   "
-              f"bursts detected: {len(ts['bursts'])}")
-    fig.text(0.5, 0.005, footer, ha="center", fontsize=8, color="#444")
+              f"bursts detected: {len(ts['bursts'])}   "
+              f"(first {DISPLAY_SKIP_SEC:.0f}s of waveform hidden — filter edge ringing)")
+    fig.text(0.5, 0.005, footer, ha="center", fontsize=8, color="#aaaaaa")
 
-    fig.savefig(OUTPUT_PNG, dpi=130, bbox_inches="tight")
+    fig.savefig(OUTPUT_PNG, dpi=130, bbox_inches="tight", facecolor=BG)
     print(f"Saved {OUTPUT_PNG}")
 
 
