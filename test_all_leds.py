@@ -13,6 +13,7 @@ import pigpio
 import time
 import sys
 import math
+import signal
 
 # --- Pin definitions ---
 LED_PINS   = [4, 18, 17, 27, 22, 5, 12, 13]   # MOSFET outputs, OUT1–OUT8
@@ -126,6 +127,11 @@ def main():
     print(f"  MOSFET outputs : {LED_PINS}")
     print(f"  Warning LEDs   : {WARN_PINS}")
     print("  Looping phases 1 → 2 → 3 → 1 ...  Ctrl+C to stop\n")
+
+    def shutdown(signum=None, frame=None):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, shutdown)
 
     try:
         setup(pi)
