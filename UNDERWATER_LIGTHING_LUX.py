@@ -92,6 +92,13 @@ BOOST_MIN_BRIGHTNESS = 0      # % floor applied in a bright room (no boost)
 pi       = pigpio.pi()
 LED_PINS = [12, 13, 17, 19, 27, 22]
 
+# Pull all MOSFET gate pins LOW on startup — prevents floating-gate partial conduction
+# on pins not yet driven by this script (and persists until pigpiod restarts)
+_ALL_MOSFET_PINS = [4, 18, 17, 27, 22, 5, 12, 13, 26, 19, 6]
+for _pin in _ALL_MOSFET_PINS:
+    pi.set_pull_up_down(_pin, pigpio.PUD_DOWN)
+    pi.set_PWM_dutycycle(_pin, 0)
+
 # ── Sequence (same as original UNDERWATER_LIGTHING.py) ───────────────────────
 brightness_sequence = [
     25, 15, 15,  8, 10,  9,  8,  6, 25,  5,
