@@ -36,18 +36,18 @@ OUTPUT_PNG = "pyTREMOR_lights01_visualization.png"
 # dominates the y-axis. The main script does the same for playback.
 DISPLAY_SKIP_SEC = 30.0
 
-# Dark theme palette
+# Dark theme palette — chosen for high mutual contrast at small line widths
 BG          = "#000000"
 FG          = "#e8e8e8"
-GRID        = "#333333"
-WAVE_COLOR  = "#9ad7ff"
-MU_COLOR    = "#ffb347"
-THR_COLOR   = "#ff5050"
-RMS_COLOR   = "#e8e8e8"
-BURST_COLOR = "#ff3030"
-EDGE_COLOR  = "#00e5ff"
-CENT_COLOR  = "#7fc7ff"
-PWM_COLOR   = "#ff6b6b"
+GRID        = "#262626"
+WAVE_COLOR  = "#80d8ff"   # pale blue — waveform
+RMS_COLOR   = "#ffffff"   # bright white — instantaneous RMS
+MU_COLOR    = "#ffd000"   # saturated yellow — running mean μ
+THR_COLOR   = "#ff2d6f"   # hot pink — μ+σ threshold (very distinct from yellow)
+BURST_COLOR = "#ff2d6f"   # same hot pink — burst event verticals
+EDGE_COLOR  = "#00e5ff"   # cyan — band edges on spectrogram
+CENT_COLOR  = "#00ff9c"   # bright green — centroid (highly distinct from PWM)
+PWM_COLOR   = "#ff8a3d"   # warm orange — PWM frequency
 
 
 def fetch():
@@ -188,9 +188,10 @@ def plot(data, sr, station, starttime, peak, ts):
         "grid.color":        GRID,
     })
 
-    fig = plt.figure(figsize=(16, 14))
-    gs  = gridspec.GridSpec(5, 1, height_ratios=[1.0, 1.4, 2.6, 1.0, 1.0],
-                            hspace=0.45)
+    fig = plt.figure(figsize=(16, 16))
+    gs  = gridspec.GridSpec(6, 1,
+                            height_ratios=[1.0, 1.4, 2.6, 1.0, 1.0, 0.9],
+                            hspace=0.55)
 
     title = (f"pyTREMOR_lights01 — {station[0]}.{station[1]}.{station[2]}.{station[3]}"
              f"   |   {cfg.FETCH_HOURS*60:.0f} min ending {starttime + len(data)/sr}"
@@ -209,6 +210,8 @@ def plot(data, sr, station, starttime, peak, ts):
     ax0.set_ylabel("Bandpass\nwaveform\n(normalised)")
     ax0.set_xlabel("")
     ax0.grid(alpha=0.3)
+    ax0.set_title("1.  raw ground motion, 1–18 Hz bandpass  (vertical marks = burst flashes)",
+                  fontsize=9, color="#bbbbbb", loc="left", pad=4)
     # mark bursts in real-seismic seconds (replay_seconds * SPEED_FACTOR)
     for bt in ts["bursts"]:
         ax0.axvline(bt * cfg.SPEED_FACTOR, color=BURST_COLOR, alpha=0.55, lw=0.6)
@@ -226,6 +229,8 @@ def plot(data, sr, station, starttime, peak, ts):
     ax1.set_xticklabels([f"{x/60:.0f}" for x in xticks])
     ax1.set_xlabel("Real-seismic time (minutes)")
     ax1.set_ylabel("Spectrogram\nfreq (Hz)")
+    ax1.set_title("2.  energy at each frequency over time  (cyan lines = LED1…LED8 band edges)",
+                  fontsize=9, color="#bbbbbb", loc="left", pad=4)
     # overlay band edges
     for e in ts["edges"]:
         ax1.axhline(e, color=EDGE_COLOR, alpha=0.45, lw=0.5, ls=":")
@@ -254,28 +259,40 @@ def plot(data, sr, station, starttime, peak, ts):
     ax2.set_ylabel("Per-LED brightness (0–100%)")
     ax2.set_xlabel("Replay time (minutes)")
     ax2.grid(alpha=0.3, axis="x")
+    ax2.set_title("3.  each LED's brightness = RMS energy inside its own frequency band",
+                  fontsize=9, color="#bbbbbb", loc="left", pad=4)
 
     # 4. Centroid + PWM frequency
     ax3 = fig.add_subplot(gs[3], sharex=ax2)
-    ax3.plot(t_replay_min, ts["centroid"], color=CENT_COLOR, lw=0.8, label="centroid (Hz)")
-    ax3.set_ylabel("Centroid (Hz)", color=CENT_COLOR)
-    ax3.tick_params(axis='y', labelcolor=CENT_COLOR)
-    ax3.set_ylim(cfg.BANDPASS_MIN, cfg.BANDPASS_MAX)
+    # Plot PWM first (orange, behind) then centroid (green, on top) so the
+    # important signal sits on top of the derived one.
     ax3b = ax3.twinx()
-    ax3b.plot(t_replay_min, ts["pwm"], color=PWM_COLOR, lw=0.6, alpha=0.85, label="PWM Hz")
+    ax3b.plot(t_replay_min, ts["pwm"], color=PWM_COLOR, lw=1.2, alpha=0.9,
+              label="PWM Hz", zorder=2)
     ax3b.set_ylim(cfg.MIN_FREQUENCY, cfg.MAX_FREQUENCY)
     ax3b.set_ylabel("PWM freq (Hz)", color=PWM_COLOR)
     ax3b.tick_params(axis='y', labelcolor=PWM_COLOR)
     ax3b.spines["top"].set_color(FG)
-    ax3b.spines["right"].set_color(FG)
+    ax3b.spines["right"].set_color(PWM_COLOR)
+    ax3b.spines["left"].set_color(CENT_COLOR)
+    ax3.plot(t_replay_min, ts["centroid"], color=CENT_COLOR, lw=1.4,
+             label="centroid (Hz)", zorder=3)
+    ax3.set_ylabel("Centroid (Hz)", color=CENT_COLOR)
+    ax3.tick_params(axis='y', labelcolor=CENT_COLOR)
+    ax3.set_ylim(cfg.BANDPASS_MIN, cfg.BANDPASS_MAX)
+    ax3.set_zorder(ax3b.get_zorder() + 1)
+    ax3.patch.set_visible(False)
     ax3.grid(alpha=0.3)
+    ax3.set_title("4.  green = where the spectral energy is centred (Hz)   →   orange = LED flicker rate (PWM Hz)",
+                  fontsize=9, color="#bbbbbb", loc="left", pad=4)
 
     # 5. RMS + burst threshold
     ax4 = fig.add_subplot(gs[4], sharex=ax2)
-    ax4.plot(t_replay_min, ts["rms"], color=RMS_COLOR, lw=0.7, label="RMS")
-    ax4.plot(t_replay_min, ts["mu"],  color=MU_COLOR,  lw=0.6, label="running mean")
-    ax4.plot(t_replay_min, ts["thr"], color=THR_COLOR, lw=0.6, ls="--",
-             label=f"burst threshold (μ + {cfg.BURST_SIGMA:.1f}σ)")
+    ax4.plot(t_replay_min, ts["rms"], color=RMS_COLOR, lw=1.0, label="RMS (loudness now)")
+    ax4.plot(t_replay_min, ts["mu"],  color=MU_COLOR,  lw=1.2,
+             label="running mean μ (baseline)")
+    ax4.plot(t_replay_min, ts["thr"], color=THR_COLOR, lw=1.4, ls="--",
+             label=f"burst threshold μ + {cfg.BURST_SIGMA:.1f}σ")
     for bt in ts["bursts"]:
         ax4.axvline(bt/60, color=BURST_COLOR, alpha=0.55, lw=0.7)
     ax4.set_ylabel("RMS")
@@ -283,6 +300,26 @@ def plot(data, sr, station, starttime, peak, ts):
     leg = ax4.legend(loc="upper right", fontsize=8, facecolor="#111111",
                      edgecolor=GRID, labelcolor=FG)
     ax4.grid(alpha=0.3)
+    ax4.set_title("5.  total loudness vs. its own statistics  →  RMS spike above pink dashed line = synchronous burst flash",
+                  fontsize=9, color="#bbbbbb", loc="left", pad=4)
+
+    # 6. Embedded key — 3-layer explanation
+    ax5 = fig.add_subplot(gs[5])
+    ax5.set_xlim(0, 1); ax5.set_ylim(0, 1)
+    ax5.axis("off")
+    key_text = (
+        "HOW TO READ THIS GRAPH — three independent layers of expression\n"
+        "\n"
+        "   LED brightness (panel 3)   ←   per-band RMS energy inside each LED's narrow frequency window (FFT)\n"
+        f"   LED flicker rate (panel 4, orange)   ←   spectral centroid (panel 4, green) mapped to {cfg.MIN_FREQUENCY}–{cfg.MAX_FREQUENCY} Hz PWM\n"
+        f"   Synchronous all-LED flash (red lines)   ←   total RMS (panel 5, white) crossing μ + {cfg.BURST_SIGMA:.1f}σ\n"
+        "\n"
+        "In short:   spectrum shape → which LED is bright   |   dominant frequency → how fast they flicker   |   sudden loudness → all flash together"
+    )
+    ax5.text(0.0, 0.95, key_text, ha="left", va="top",
+             fontsize=9.5, color=FG, family="monospace",
+             bbox=dict(boxstyle="round,pad=0.6", fc="#0a0a0a",
+                       ec=GRID, lw=0.8))
 
     footer = (f"GAIN={cfg.GAIN}   BASE_BRIGHTNESS={cfg.BASE_BRIGHTNESS}   "
               f"SMOOTH_TAU={cfg.SMOOTH_TAU}s   SPECTRUM_WIN={cfg.SPECTRUM_WIN}s   "

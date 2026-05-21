@@ -106,6 +106,101 @@ driver and the visualizer read from there.
 
 ## How to read the visualizer PNG
 
+### The three independent layers of expression
+
+The installation does **not** map one seismic signal to one LED. Three
+separate signals are extracted from the same ground-motion trace and each
+drives a different aspect of the light:
+
+| Layer | What you perceive | Driven by | Visible in panel |
+|---|---|---|---|
+| **Per-LED brightness** | Which LED is brighter than its neighbour | RMS energy *inside that LED's own frequency band* (FFT bin) | 3 |
+| **PWM flicker rate** | Whether LEDs look smooth or visibly buzzing | **Spectral centroid** — where the spectrum's energy is centred on average | 4 |
+| **Synchronous flashes** | All 8 LEDs spike to 100 % together | **Total RMS** crossing μ + BURST_SIGMA·σ | 5 (and red verticals everywhere) |
+
+So:
+- *spectrum shape* → which LED is bright
+- *dominant frequency* → how fast they flicker
+- *sudden loudness* → all flash together
+
+### Per-LED brightness — the FFT band split
+
+Every 50 ms the script:
+
+1. takes the last 1 s of seismic data
+2. runs an FFT → "how much energy is at each frequency?"
+3. splits the 1–18 Hz range into 8 log-spaced bins (LED1 = lowest, LED8 = highest)
+4. measures RMS energy inside each bin → one number per LED
+5. scales (× `GAIN`), smooths (`SMOOTH_TAU`), clips 0–100 %
+6. that number is the LED's PWM duty cycle = its brightness
+
+Each LED only "listens" to its own slice of the spectrum. Look at the
+spectrogram (panel 2) and panel 3 together: bright orange stripe at 5 Hz
+in panel 2 → LED5's trace bulges in panel 3.
+
+### Centroid — the "mood" indicator
+
+The **spectral centroid** is a single number per frame that summarises
+where energy is *concentrated*:
+
+$$ \text{centroid} = \frac{\sum_f f \cdot S(f)}{\sum_f S(f)} $$
+
+- Low-frequency microseism dominant → centroid drops toward ~2 Hz
+- High-frequency tremor or local quake → centroid climbs toward ~10 Hz
+- Balanced → ~5–6 Hz
+
+The centroid does **not** affect any LED's brightness. Instead it is
+mapped linearly into the PWM frequency range (`MIN_FREQUENCY` ..
+`MAX_FREQUENCY`, default 170–800 Hz), so:
+
+- Low centroid → ~170 Hz PWM → flicker is **visible** (adds a slow buzzy
+  texture during quiet seismic moments)
+- High centroid → ~800 Hz PWM → flicker too fast for the eye → LEDs look
+  **smoothly** lit
+
+This is a second, perpendicular dimension of expression: brightness tells
+*intensity*, PWM rate tells *seismic mood* — low and slow vs. high and
+snappy.
+
+In panel 4: **green line = centroid** (left axis, Hz), **orange line =
+PWM frequency** (right axis, Hz). They are the same shape because PWM is
+a linear rescaling of the centroid.
+
+### RMS — the burst detector
+
+RMS (root-mean-square) is the simplest loudness measure: average the
+squared amplitude over the last 1 s, take the square root. It ignores
+frequency entirely.
+
+$$ \mu = \text{average RMS over last } \sim 40\text{ s} $$
+$$ \sigma = \text{standard deviation of RMS over the same window} $$
+$$ \text{threshold} = \mu + \text{BURST\_SIGMA} \cdot \sigma $$
+
+In panel 5:
+- **White line** — instantaneous RMS (loudness *now*)
+- **Yellow line** — μ, the slow baseline of "normal" loudness
+- **Pink dashed line** — the trigger threshold
+
+Every time the white line punches through the pink dashed line, a
+**synchronous all-LED 100 % flash** fires for `BURST_DURATION` s. Those
+are the pink verticals visible in all four lower panels.
+
+RMS answers: *"is this moment statistically unusual compared to the last
+~40 s of background?"* If yes → flash.
+
+### Putting it together
+
+A single seismic burst usually causes:
+1. several band-LEDs brightening (multiple frequencies excited)
+2. centroid jumping → PWM frequency changes
+3. RMS spiking above threshold → synchronous flash
+
+But subtler events show in only one layer — e.g. a quiet shift of
+dominant frequency from 4 to 7 Hz changes PWM speed without triggering a
+flash and without changing total brightness much.
+
+### Panel-by-panel reference
+
 Run the visualizer to render the last 60 min of seismic data through the
 current parameter set:
 
@@ -127,13 +222,15 @@ Output is `pyTREMOR_lights01_visualization.png`. Five stacked panels:
    ocean microseism and volcanic tremor that produces the quiet LED3.**
 3. **Per-LED brightness** (stacked, replay-time) — each band's brightness
    over time. Each colour band is one LED; the height is the live PWM duty
-   cycle (0–100 %). Burst flashes shown as red verticals.
-4. **Centroid + PWM** — blue line = spectral centroid (dominant frequency
-   in Hz, per FFT frame). Red line on twin axis = PWM frequency in Hz that
-   the centroid is mapped to.
-5. **RMS + burst threshold** — white line = instantaneous loudness, orange =
-   rolling mean μ, red dashed = μ + BURST_SIGMA·σ threshold. Flashes fire
-   when the white line crosses the red.
+   cycle (0–100 %). Burst flashes shown as pink verticals.
+4. **Centroid + PWM** — **green line = spectral centroid** (dominant
+   frequency in Hz, per FFT frame). **Orange line on twin axis = PWM
+   frequency** in Hz that the centroid is mapped to.
+5. **RMS + burst threshold** — **white line = instantaneous loudness**,
+   **yellow = rolling mean μ**, **pink dashed = μ + BURST_SIGMA·σ
+   threshold**. Flashes fire when the white line crosses the pink dashed.
+6. **Key panel** at the bottom of the PNG — embedded summary of the three
+   layers of expression.
 
 ### The LED3 (2.1–3 Hz) flat-line — this is real
 

@@ -8,6 +8,25 @@ Lux sensor code adapted from [Rpi_Lux_Monitor_BH1750_Oled](https://github.com/RV
 
 ---
 
+## Repository structure
+
+| Folder | Purpose |
+|---|---|
+| [01_pyTREMOR_lights/](01_pyTREMOR_lights) | **Live volcanic-tremor LED driver.** Streams real seismic data from a remote seismometer (FDSN/ObsPy) and drives 8 PWM LEDs. Includes its own [README](01_pyTREMOR_lights/README.md), visualizer, and example PNG. |
+| [02_underwater_lighting/](02_underwater_lighting) | Original artistic underwater-tremor sequences (independent / synchronous / lux-coupled variants) and `__alloff.py` panic-stop. |
+| [03_lux_monitor/](03_lux_monitor) | BH1750 lux sensor + OLED display script and matching systemd `.service` units. |
+| [04_hardware_tests/](04_hardware_tests) | Standalone bench tests — GPIO sequential, PWM sequential, single-pin LED tests. Useful for verifying wiring. |
+| [05_docs/](05_docs) | Setup guides (MONA_SETUP_GUIDE.md, SETUP_GUIDE.md), the mesh-shield wiring PDF, and the shield photo. |
+
+The two main live programs are:
+
+- [01_pyTREMOR_lights/pyTREMOR_lights01.py](01_pyTREMOR_lights/pyTREMOR_lights01.py) — seismic-data-driven LEDs
+- [03_lux_monitor/rpi_lux_monitor_bh1750_oled.py](03_lux_monitor/rpi_lux_monitor_bh1750_oled.py) — lux-adaptive brightness floor
+
+The two can be combined on the same Pi (the .service file launches both in turn).
+
+---
+
 ## How the Lux-Adaptive Logic Works
 
 ```
