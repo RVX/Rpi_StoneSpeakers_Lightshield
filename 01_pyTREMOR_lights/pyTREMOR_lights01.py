@@ -180,15 +180,62 @@ def _load_latest_cache():
     return None
 
 
+def _make_client():
+    """Try to build an FDSN Client; return None on failure.
+
+    Client(...) does service discovery in __init__, which raises
+    FDSNNoServiceException when EarthScope is unreachable. Returning None
+    on failure lets the caller fall back to cached data instead of
+    crash-looping under systemd.
+    """
+    try:
+        return Client(FDSN_BASE, timeout=60)
+    except Exception as e:
+        print(f"  ! FDSN client init failed ({type(e).__name__}): {e}",
+              flush=True)
+        return None
+
+
+def _replay_cache():
+    """Load + process the newest cached miniSEED. Used when no live client.
+
+    Returns (data, sr, station_tuple, "cache") or raises RuntimeError if
+    the cache is empty.
+    """
+    cached = _load_latest_cache()
+    if cached is None:
+        raise RuntimeError("No FDSN client and no cached miniSEED available.")
+    st, station, path = cached
+    print(f"  ↻ Replaying cached {station[0]}.{station[1]}."
+          f"{station[2]}.{station[3]} from {os.path.basename(path)}",
+          flush=True)
+    st.merge(fill_value="interpolate")
+    st.detrend("demean")
+    st.filter("bandpass", freqmin=BANDPASS_MIN, freqmax=BANDPASS_MAX,
+              corners=4, zerophase=True)
+    tr = st[0]
+    data = tr.data.astype(np.float32)
+    sr   = float(tr.stats.sampling_rate)
+    peak = float(np.max(np.abs(data))) or 1.0
+    data = data / peak
+    print(f"  Got {len(data)} cached samples @ {sr:.0f} Hz "
+          f"({len(data)/sr/60:.1f} min, peak abs={peak:.3g})",
+          flush=True)
+    return data, sr, station, "cache"
+
+
 def fetch_stream(client, t_end):
     """Download FETCH_HOURS up to t_end (minus the realtime lag), processed.
 
     Tries each station in STATIONS in order; returns the first one that
-    returns data. If ALL stations fail (network outage, EarthScope down),
-    falls back to the most recent successfully-cached miniSEED on disk so
-    the lamp keeps tremoring on real seismic data. Returns (data, sr,
-    station_tuple, source_label) where source_label is "live" or "cache".
+    returns data. If `client` is None (FDSN unreachable at startup) or if
+    ALL stations fail, falls back to the most recent successfully-cached
+    miniSEED on disk so the lamp keeps tremoring on real seismic data.
+    Returns (data, sr, station_tuple, source_label) where source_label is
+    "live" or "cache".
     """
+    if client is None:
+        return _replay_cache()
     t_end   = t_end - FETCH_LAG_SEC
     t_start = t_end - FETCH_HOURS * 3600
     last_err = None
@@ -309,7 +356,10 @@ def run(pi):
     print(f"    Speed      : {SPEED_FACTOR}× real time")
     print(f"    Range      : {MIN_BRIGHTNESS}% – {MAX_BRIGHTNESS}%\n")
 
-    client = Client(FDSN_BASE, timeout=60)
+    client = _make_client()
+    if client is None:
+        print("  ! starting in CACHE-ONLY mode; will keep trying to "
+              "reconnect to FDSN in the background.", flush=True)
 
     # Smoothing state per band + running stats for burst detection
     smoothed   = np.full(n_bands, BASE_BRIGHTNESS, dtype=np.float32)
@@ -317,13 +367,19 @@ def run(pi):
     last_burst = -1e9
     alpha      = 1.0 - math.exp(-UPDATE_INTERVAL / SMOOTH_TAU)
 
-    # Initial fetch
-    try:
-        data, sr, active, source = fetch_stream(client, UTCDateTime.now())
-    except Exception as e:
-        print(f"  ! initial fetch failed: {e}")
-        ambient_pulse(pi, 20)
-        data, sr, active, source = fetch_stream(client, UTCDateTime.now())
+    # Initial fetch — retry until we get SOMETHING (live or cache).
+    # Without this loop, a cold start during an FDSN outage with empty
+    # cache would crash → systemd restart → eventually StartLimitBurst
+    # kills the service for good.
+    while True:
+        try:
+            data, sr, active, source = fetch_stream(client, UTCDateTime.now())
+            break
+        except Exception as e:
+            print(f"  ! initial fetch failed: {e}", flush=True)
+            ambient_pulse(pi, 30)
+            if client is None:
+                client = _make_client()  # retry FDSN discovery
     print(f"    Active station: {active[0]}.{active[1]}.{active[2]}.{active[3]} ({source})\n")
 
     win_samples   = int(SPECTRUM_WIN * sr)
@@ -335,6 +391,10 @@ def run(pi):
         # Need to refetch?
         seconds_left = (len(data) - cursor) / sr
         if seconds_left < REFETCH_MARGIN:
+            # If we're running cache-only, try once more to re-establish
+            # the FDSN client; it's cheap and lets us return to live.
+            if client is None:
+                client = _make_client()
             try:
                 data, sr, active, source = fetch_stream(client, UTCDateTime.now())
                 cursor = float(win_samples)
