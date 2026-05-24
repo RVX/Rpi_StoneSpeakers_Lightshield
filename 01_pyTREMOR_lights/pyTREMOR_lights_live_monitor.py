@@ -65,6 +65,42 @@ HISTORY_FRAMES   = int(HISTORY_SEC * FPS_ASSUMED)
 # Match band edges used by pyTREMOR_lights01.py (1.0 – 18.0 Hz, 8 log bands)
 BAND_EDGES = np.geomspace(1.0, 18.0, 9)
 
+# Per-station metadata mirrored from STATIONS in pyTREMOR_lights01.py.
+# Keyed by the SEED station code (sta).
+#   value = (place, lat_deg, lon_deg, region, volcano)
+STATION_INFO = {
+    "HNR":  ("Honiara, Solomon Islands",        -9.4387,  159.9472,
+             "Solomon Islands arc",              "Savo / Kavachi"),
+    "DAV":  ("Davao, Philippines",                7.0697,  125.5791,
+             "Mindanao volcanic arc",            "Mt. Apo (2954 m)"),
+    "MAJO": ("Matsushiro, Japan",                36.5457,  138.2041,
+             "Japanese arc · Honshu",            "Mt. Asama / Kusatsu-Shirane"),
+    "PET":  ("Petropavlovsk-Kamchatsky, Russia", 53.0233,  158.6499,
+             "Kamchatka arc",                    "Avachinsky / Klyuchevskoy"),
+    "SNZO": ("South Karori, New Zealand",       -41.3087,  174.7044,
+             "Taupo volcanic zone (regional)",   "Mt. Ruapehu / Taupo caldera"),
+}
+
+
+def _station_descriptor(station_id):
+    """Return a two-line label describing the station whose code appears in
+    `station_id` (e.g. "IU.DAV.00.BHZ"). Falls back gracefully when the
+    code is unknown or not yet parsed."""
+    if not station_id or station_id == "?":
+        return ("station: —  waiting for first fetch …", "")
+    parts = station_id.split(".")
+    sta = parts[1] if len(parts) >= 2 else station_id
+    info = STATION_INFO.get(sta)
+    if info is None:
+        return (f"station: {station_id}", "")
+    place, lat, lon, region, volcano = info
+    lat_s = f"{abs(lat):.2f}\u00b0{'N' if lat >= 0 else 'S'}"
+    lon_s = f"{abs(lon):.2f}\u00b0{'E' if lon >= 0 else 'W'}"
+    line1 = f"station: {station_id}   \u2014   {place}   \u00b7   {lat_s} {lon_s}"
+    line2 = f"region: {region}   \u00b7   volcano: {volcano}"
+    return (line1, line2)
+
+
 # ----------------------------------------------------------------------------
 # Log line parsers
 # ----------------------------------------------------------------------------
@@ -382,20 +418,34 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         width_ratios=[1.0, 1.6],
         height_ratios=[1.0, 1.0, 0.75, 0.20],
         hspace=0.80, wspace=0.22,
-        left=0.06, right=0.97, top=0.92, bottom=0.06,
+        left=0.06, right=0.97, top=0.86, bottom=0.06,
     )
-    # Pi identifier badge — top-left big label so you can tell 5 monitors
-    # apart at a glance, plus the full user@host on the right.
-    fig.text(
-        0.06, 0.965, pi_short.upper(),
-        ha="left", va="center",
-        fontsize=18, color=ACCENT, fontweight="bold",
+    # ------ Centered header block ----------------------------------------
+    # Row 1: big bold title combining product + Pi id so 5 windows side
+    # by side are unambiguous at a glance.
+    title_txt = fig.text(
+        0.5, 0.965, f"PYTREMOR  \u00b7  {pi_short.upper()}",
+        ha="center", va="center",
+        fontsize=22, color=TEXT_PRIMARY, fontweight="bold",
         family="monospace",
     )
+    # Row 2: station code + place + lat/lon
+    station_line1 = fig.text(
+        0.5, 0.925, "station: —  waiting for first fetch …",
+        ha="center", va="center",
+        fontsize=11, color=ACCENT, family="monospace", fontweight="bold",
+    )
+    # Row 3: region + volcano
+    station_line2 = fig.text(
+        0.5, 0.900, "",
+        ha="center", va="center",
+        fontsize=10, color=TEXT_MUTED, family="monospace",
+    )
+    # Small SSH destination in top-right for debugging
     fig.text(
-        0.97, 0.965, pi_long,
-        ha="right", va="center",
-        fontsize=10, color=TEXT_MUTED, family="monospace", alpha=0.9,
+        0.985, 0.985, pi_long,
+        ha="right", va="top",
+        fontsize=8.5, color=TEXT_MUTED, family="monospace", alpha=0.7,
     )
     ax_bars     = fig.add_subplot(gs[0:2, 0])
     ax_water    = fig.add_subplot(gs[0,   1])
@@ -468,7 +518,8 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     ax_bars.set_yticks([0, 25, 50, 75, 100])
     ax_bars.set_ylabel("brightness  (%)", color=TEXT_MUTED, fontsize=9)
     ax_bars.set_title("current LED output  ·  live lamp preview",
-                      color=TEXT_PRIMARY, fontsize=11, pad=10, fontweight="light")
+                      color=TEXT_PRIMARY, fontsize=11, pad=10,
+                      fontweight="bold", loc="center")
     ax_bars.grid(axis="y", color=GRID_COLOR, alpha=0.5, linewidth=0.6)
     ax_bars.set_axisbelow(True)
 
@@ -485,7 +536,8 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
                              color=TEXT_MUTED, fontsize=8)
     ax_water.set_xlabel("seconds ago", color=TEXT_MUTED, fontsize=9)
     ax_water.set_title("per-band history  ·  60 s waterfall",
-                       color=TEXT_PRIMARY, fontsize=11, pad=10, fontweight="light")
+                       color=TEXT_PRIMARY, fontsize=11, pad=10,
+                       fontweight="bold", loc="center")
     cbar = fig.colorbar(im, ax=ax_water, fraction=0.035, pad=0.015)
     cbar.outline.set_edgecolor(GRID_COLOR)
     cbar.ax.tick_params(colors=TEXT_MUTED, labelsize=8, length=2)
@@ -502,7 +554,8 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     ax_cen.set_xlabel("seconds ago", color=TEXT_MUTED, fontsize=9)
     ax_cen.set_ylabel("centroid  (Hz)", color=TEXT_MUTED, fontsize=9)
     ax_cen.set_title("spectral centroid  →  PWM frequency",
-                     color=TEXT_PRIMARY, fontsize=11, pad=10, fontweight="light")
+                     color=TEXT_PRIMARY, fontsize=11, pad=10,
+                     fontweight="bold", loc="center")
     ax_cen.grid(color=GRID_COLOR, alpha=0.4, linewidth=0.6)
     ax_cen.set_axisbelow(True)
 
@@ -528,19 +581,28 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     ax_overview.set_xlabel("seconds into seismic cache  ·  blue line = current replay position",
                            color=TEXT_MUTED, fontsize=9)
     ax_overview.set_title("overall sonification  ·  full seismic cache",
-                          color=TEXT_PRIMARY, fontsize=11, pad=10, fontweight="light")
+                          color=TEXT_PRIMARY, fontsize=11, pad=10,
+                          fontweight="bold", loc="center")
 
     # --- status text ------------------------------------------------------
-    status_txt = ax_status.text(
-        0.01, 0.55, "waiting for first frame…",
+    # Live UTC clock + fetch window on top (placed inside ax_status so blit
+    # can redraw it cheaply at 10 fps without forcing a full canvas redraw).
+    time_txt = ax_status.text(
+        0.5, 0.92, "",
         transform=ax_status.transAxes,
-        ha="left", va="center",
+        ha="center", va="center",
+        fontsize=9.5, color=TEXT_MUTED, family="monospace", alpha=0.95,
+    )
+    status_txt = ax_status.text(
+        0.5, 0.55, "waiting for first frame…",
+        transform=ax_status.transAxes,
+        ha="center", va="center",
         fontsize=10.5, color=TEXT_PRIMARY, family="monospace", alpha=0.9,
     )
     overview_status_txt = ax_status.text(
-        0.01, 0.1, "",
+        0.5, 0.1, "",
         transform=ax_status.transAxes,
-        ha="left", va="center",
+        ha="center", va="center",
         fontsize=9, color=TEXT_MUTED, family="monospace", alpha=0.8,
     )
 
@@ -613,6 +675,15 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
             if mf:
                 net, sta, loc, ch, t0, t1 = mf.groups()
                 state["station"] = f"{net}.{sta}.{loc}.{ch}"
+                state["fetch_t0"] = t0
+                state["fetch_t1"] = t1
+                # Refresh the centered station-info header rows. These are
+                # figure-level texts (not on a blitted axis) so we force a
+                # one-shot full redraw to make them appear/update.
+                l1, l2 = _station_descriptor(state["station"])
+                station_line1.set_text(l1)
+                station_line2.set_text(l2)
+                fig.canvas.draw_idle()
                 key = (net, sta, loc, ch, t0, t1)
                 if req_q is not None and key != state["active_fetch"]:
                     state["active_fetch"] = key
@@ -707,22 +778,34 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
             pass_n = int(state["last_cur"] // ov_dur) + 1
             pass_str = f"pass {pass_n}" if pass_n > 1 else "first pass"
             status_txt.set_text(
-                f"station = {state['station']:<18}   "
-                f"replay t = {state['last_cur']:7.1f} s   "
-                f"centroid = {state['last_cen']:5.2f} Hz   "
-                f"PWM = {state['last_pwm']:4d} Hz   "
-                f"frames = {state['n_frames']}   "
-                f"bursts = {state['n_bursts']}   "
+                f"replay t = {state['last_cur']:7.1f} s   \u00b7   "
+                f"centroid = {state['last_cen']:5.2f} Hz   \u00b7   "
+                f"PWM = {state['last_pwm']:4d} Hz   \u00b7   "
+                f"frames = {state['n_frames']}   \u00b7   "
+                f"bursts = {state['n_bursts']}   \u00b7   "
                 f"[{pass_str}]"
                 + ("" if state["connected"] else "   [waiting for ssh…]")
             )
+            # Live UTC clock + (if known) the FDSN window being replayed,
+            # so a glance at the header tells you what calendar moment of
+            # seismicity the lamp is currently tremoring on.
+            now_utc = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            window = ""
+            t0 = state.get("fetch_t0")
+            t1 = state.get("fetch_t1")
+            if t0 and t1:
+                # 2026-05-25T14:00:45.626Z  ->  2026-05-25 14:00
+                def _fmt(ts):
+                    return ts.replace("T", " ")[:16]
+                window = f"   \u00b7   window: {_fmt(t0)} \u2192 {_fmt(t1)} UTC"
+            time_txt.set_text(f"now: {now_utc}{window}")
 
         # Every animated artist must be returned every frame so blit
         # paints it on top of the restored background. Skipping any of
         # them on off-frames causes flicker (vanish/reappear cycle).
         return [led_core, led_halo, *bars, peak_line, *bar_value_txt,
                 ov_im, ov_cursor, ov_played, im, cen_line,
-                status_txt, overview_status_txt]
+                status_txt, overview_status_txt, time_txt]
 
     # ---- restore + persist window geometry -------------------------------
     # Qt backend: read/write x, y, width, height. Saved on window close.
