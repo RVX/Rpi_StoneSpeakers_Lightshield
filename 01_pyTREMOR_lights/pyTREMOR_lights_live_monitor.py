@@ -335,6 +335,31 @@ SOFT_CMAP = matplotlib.colors.LinearSegmentedColormap.from_list(
 )
 
 
+def _pi_label(ssh_dest):
+    """Return (short, long) labels for the Pi being monitored.
+
+    Input examples:
+        'sjc1@fe80::8aa2:9eff:fed7:9f99%19'  -> ('sjc1', 'sjc1 · fe80::…9f99%19')
+        'sjc2@10.22.171.3'                   -> ('sjc2', 'sjc2 · 10.22.171.3')
+        'pi@raspberrypi.local'               -> ('pi',   'pi · raspberrypi.local')
+    The short form is meant for the window title; the long form is the
+    on-figure badge so you can tell 5 simultaneous monitors apart at a
+    glance without reading the title bar.
+    """
+    user, _, host = ssh_dest.partition("@")
+    if not host:
+        host, user = user, ""
+    short = user or host.split(".")[0]
+    # Truncate long IPv6 link-local for readability
+    if ":" in host and len(host) > 28:
+        head, _, tail = host.rpartition(":")
+        host_disp = f"{head.split(':',2)[0]}::\u2026{tail}"
+    else:
+        host_disp = host
+    long = f"{user} \u00b7 {host_disp}" if user else host_disp
+    return short, long
+
+
 def _style_axes(ax):
     ax.set_facecolor(PANEL_COLOR)
     for spine in ax.spines.values():
@@ -346,15 +371,31 @@ def _style_axes(ax):
     ax.yaxis.label.set_color(TEXT_MUTED)
 
 
-def run_ui(q, req_q=None):
+def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
+    pi_short, pi_long = _pi_label(ssh_dest)
     fig = plt.figure(figsize=(13, 8.5), facecolor=BG_COLOR, dpi=100)
-    fig.canvas.manager.set_window_title("pyTREMOR · live monitor")
+    fig.canvas.manager.set_window_title(
+        f"pyTREMOR · live monitor · {pi_short}"
+    )
     gs = fig.add_gridspec(
         4, 2,
         width_ratios=[1.0, 1.6],
         height_ratios=[1.0, 1.0, 0.75, 0.20],
         hspace=0.80, wspace=0.22,
-        left=0.06, right=0.97, top=0.94, bottom=0.06,
+        left=0.06, right=0.97, top=0.92, bottom=0.06,
+    )
+    # Pi identifier badge — top-left big label so you can tell 5 monitors
+    # apart at a glance, plus the full user@host on the right.
+    fig.text(
+        0.06, 0.965, pi_short.upper(),
+        ha="left", va="center",
+        fontsize=18, color=ACCENT, fontweight="bold",
+        family="monospace",
+    )
+    fig.text(
+        0.97, 0.965, pi_long,
+        ha="right", va="center",
+        fontsize=10, color=TEXT_MUTED, family="monospace", alpha=0.9,
     )
     ax_bars     = fig.add_subplot(gs[0:2, 0])
     ax_water    = fig.add_subplot(gs[0,   1])
@@ -760,7 +801,7 @@ def main():
     t_tail.start()
     t_ov.start()
     try:
-        run_ui(ui_q, req_q)
+        run_ui(ui_q, req_q, ssh_dest=ssh_dest)
     finally:
         stop.set()
         req_q.put(None)
