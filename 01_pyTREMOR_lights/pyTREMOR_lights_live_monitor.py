@@ -247,12 +247,24 @@ def _spawn_tail(ssh_dest):
         f"stdbuf -oL -eL tail -F -n 200 {LOG_PATH}"
     )
     cmd += [ssh_dest, remote]
-    return subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=0,
-    ), cmd
+    # CREATE_NO_WINDOW (0x08000000) keeps Windows from popping a black
+    # console window every time we (re)spawn ssh. Matters specifically when
+    # the monitor is launched via pythonw.exe (no parent console) — each
+    # Popen child would otherwise allocate its own console window every
+    # reconnect, then close it again, producing a flicker that's both
+    # distracting and triggers the 'ssh.exe.txt' shortcut file Windows
+    # sometimes leaves behind. Has no effect when there's a parent
+    # console (regular python.exe launch).
+    popen_kwargs = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "bufsize": 0,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = (
+            getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        )
+    return subprocess.Popen(cmd, **popen_kwargs), cmd
 
 
 def tail_thread(ssh_dest, q, stop_event):
@@ -416,9 +428,12 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     gs = fig.add_gridspec(
         4, 2,
         width_ratios=[1.0, 1.6],
-        height_ratios=[1.0, 1.0, 0.75, 0.20],
+        # row 0 = status strip (clock + replay/centroid/PWM/frames/bursts)
+        # rows 1–2 = bars / waterfall / centroid
+        # row 3 = overview spectrogram (full width)
+        height_ratios=[0.30, 1.0, 1.0, 0.85],
         hspace=0.80, wspace=0.22,
-        left=0.06, right=0.97, top=0.86, bottom=0.06,
+        left=0.06, right=0.97, top=0.86, bottom=0.07,
     )
     # ------ Centered header block ----------------------------------------
     # Row 1: big bold title combining product + Pi id so 5 windows side
@@ -447,11 +462,11 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         ha="right", va="top",
         fontsize=8.5, color=TEXT_MUTED, family="monospace", alpha=0.7,
     )
-    ax_bars     = fig.add_subplot(gs[0:2, 0])
-    ax_water    = fig.add_subplot(gs[0,   1])
-    ax_cen      = fig.add_subplot(gs[1,   1])
-    ax_overview = fig.add_subplot(gs[2, :])
-    ax_status   = fig.add_subplot(gs[3, :])
+    ax_bars     = fig.add_subplot(gs[1:3, 0])
+    ax_water    = fig.add_subplot(gs[1,   1])
+    ax_cen      = fig.add_subplot(gs[2,   1])
+    ax_overview = fig.add_subplot(gs[3, :])
+    ax_status   = fig.add_subplot(gs[0, :])
     ax_status.set_facecolor(BG_COLOR)
     ax_status.axis("off")
     for ax in (ax_bars, ax_water, ax_cen, ax_overview):
@@ -584,23 +599,24 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
                           color=TEXT_PRIMARY, fontsize=11, pad=10,
                           fontweight="bold", loc="center")
 
-    # --- status text ------------------------------------------------------
-    # Live UTC clock + fetch window on top (placed inside ax_status so blit
-    # can redraw it cheaply at 10 fps without forcing a full canvas redraw).
-    time_txt = ax_status.text(
-        0.5, 0.92, "",
-        transform=ax_status.transAxes,
-        ha="center", va="center",
-        fontsize=9.5, color=TEXT_MUTED, family="monospace", alpha=0.95,
-    )
+    # --- status strip (sits between the header texts and the plots) ------
+    # Three centered rows on ax_status (gs[0, :]) so the operator scans
+    # the page top-to-bottom and reaches plots only after they have read
+    # what station / window / replay state is being shown.
     status_txt = ax_status.text(
-        0.5, 0.55, "waiting for first frame…",
+        0.5, 0.78, "waiting for first frame…",
         transform=ax_status.transAxes,
         ha="center", va="center",
         fontsize=10.5, color=TEXT_PRIMARY, family="monospace", alpha=0.9,
     )
+    time_txt = ax_status.text(
+        0.5, 0.40, "",
+        transform=ax_status.transAxes,
+        ha="center", va="center",
+        fontsize=9.5, color=TEXT_MUTED, family="monospace", alpha=0.95,
+    )
     overview_status_txt = ax_status.text(
-        0.5, 0.1, "",
+        0.5, 0.05, "",
         transform=ax_status.transAxes,
         ha="center", va="center",
         fontsize=9, color=TEXT_MUTED, family="monospace", alpha=0.8,
