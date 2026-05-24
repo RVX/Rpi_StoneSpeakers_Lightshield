@@ -431,7 +431,7 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         # row 0 = status strip (clock + replay/centroid/PWM/frames/bursts)
         # rows 1–2 = bars / waterfall / centroid
         # row 3 = overview spectrogram (full width)
-        height_ratios=[0.30, 1.0, 1.0, 0.85],
+        height_ratios=[0.55, 1.0, 1.0, 0.85],
         hspace=0.80, wspace=0.22,
         left=0.06, right=0.97, top=0.86, bottom=0.07,
     )
@@ -604,19 +604,19 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     # the page top-to-bottom and reaches plots only after they have read
     # what station / window / replay state is being shown.
     status_txt = ax_status.text(
-        0.5, 0.78, "waiting for first frame…",
+        0.5, 0.85, "waiting for first frame…",
         transform=ax_status.transAxes,
         ha="center", va="center",
         fontsize=10.5, color=TEXT_PRIMARY, family="monospace", alpha=0.9,
     )
     time_txt = ax_status.text(
-        0.5, 0.40, "",
+        0.5, 0.50, "",
         transform=ax_status.transAxes,
         ha="center", va="center",
         fontsize=9.5, color=TEXT_MUTED, family="monospace", alpha=0.95,
     )
     overview_status_txt = ax_status.text(
-        0.5, 0.05, "",
+        0.5, 0.15, "",
         transform=ax_status.transAxes,
         ha="center", va="center",
         fontsize=9, color=TEXT_MUTED, family="monospace", alpha=0.8,
