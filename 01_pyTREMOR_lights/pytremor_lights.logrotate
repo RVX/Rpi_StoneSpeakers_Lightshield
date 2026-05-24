@@ -1,0 +1,29 @@
+# /etc/logrotate.d/pytremor_lights
+#
+# Keep the lamp's log file bounded so the SD card never fills up.
+# `copytruncate` is REQUIRED: it preserves the file inode so both
+#   1. the running Python process (writing via `append:` in systemd), and
+#   2. the laptop monitor's `ssh ... tail -F` stream
+# continue uninterrupted across rotation. Without copytruncate the file
+# would be renamed and a new one created, but the python and tail file
+# handles would still point at the (now hidden) old inode and silently
+# stop appearing in either the log or the monitor UI.
+#
+# Install with:
+#     sudo cp pytremor_lights.logrotate /etc/logrotate.d/pytremor_lights
+#     sudo chown root:root /etc/logrotate.d/pytremor_lights
+#     sudo chmod 0644 /etc/logrotate.d/pytremor_lights
+# Test once without waiting for cron:
+#     sudo logrotate -f /etc/logrotate.d/pytremor_lights
+
+/var/log/pytremor_lights.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su root adm
+    create 0644 sjc1 adm
+}

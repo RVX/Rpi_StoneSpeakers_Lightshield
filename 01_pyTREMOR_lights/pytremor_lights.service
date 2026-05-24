@@ -3,14 +3,31 @@ Description=pyTREMOR Seismic LED Driver (live volcanic tremor)
 After=network-online.target pigpiod.service
 Wants=network-online.target
 Requires=pigpiod.service
+# If the service crash-restarts more than 20 times in 10 minutes, give up
+# (something is genuinely broken — don't burn the SD card with restart loops).
+StartLimitIntervalSec=600
+StartLimitBurst=20
 
 [Service]
 Type=simple
 User=sjc1
 WorkingDirectory=/home/sjc1
+# /var/lib/pytremor (miniSEED cache) — systemd creates+chowns it for us.
+StateDirectory=pytremor
+StateDirectoryMode=0755
 ExecStart=/home/sjc1/venv_tremor/bin/python3 /home/sjc1/pyTREMOR_lights01.py
+# Always come back. 10 s pause gives FDSN / DNS / pigpiod time to recover.
 Restart=always
 RestartSec=10
+# Kill cleanly on shutdown so the failsafe() block runs and the lamp goes
+# to its 25% / 800 Hz safe state instead of holding a random PWM frame.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+# Log to journald AND mirror to /var/log/pytremor_lights.log so the live
+# monitor on the laptop can keep tailing the same path it always has.
+# `append:` is critical — combined with the logrotate `copytruncate`
+# directive it means the file fd survives rotation and the SSH tail
+# never breaks.
 StandardOutput=append:/var/log/pytremor_lights.log
 StandardError=append:/var/log/pytremor_lights.log
 

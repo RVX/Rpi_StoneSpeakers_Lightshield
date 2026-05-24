@@ -14,16 +14,19 @@
 #
 # Requires: pip install obspy numpy pigpio
 
+import os
+import glob
 import pigpio
 import time
 import signal
 import math
+import tempfile
 from datetime import datetime
 from collections import deque
 
 import numpy as np
 from obspy.clients.fdsn import Client
-from obspy import UTCDateTime
+from obspy import UTCDateTime, read as obspy_read
 
 # --- Hardware -----------------------------------------------------------------
 LED_PINS = [4, 18, 17, 27, 22, 5, 12, 13]   # OUT1 – OUT8
@@ -53,6 +56,15 @@ FETCH_LAG_SEC   = 600       # EarthScope often lacks the last few minutes — st
 REFETCH_MARGIN  = 60        # re-download this many seconds before cache runs out
 BANDPASS_MIN    = 1.0       # Hz — pyTREMOR default
 BANDPASS_MAX    = 18.0      # Hz — pyTREMOR default for 40 sps BHZ
+
+# --- Resilience: local seismic cache ------------------------------------------
+# When every FDSN station fails (network down, EarthScope outage, station
+# offline) we fall back to the most recent successfully-downloaded window
+# stored on disk. The lamp keeps tremoring from cached data instead of
+# going dark. The cache survives reboots, so even a fresh Pi boot during
+# a network outage still produces a real seismic signal.
+CACHE_DIR       = "/var/lib/pytremor"
+CACHE_MAX_FILES = 6         # keep ~6 most-recent windows (~6 hours of seismic)
 
 # --- Mapping ------------------------------------------------------------------
 SPEED_FACTOR    = 5.0       # 1.0 = real time; 5.0 = 5x faster
@@ -91,11 +103,91 @@ def failsafe(pi):
     set_all(pi, 25, 800)
 
 
+def _ensure_cache_dir():
+    """Create CACHE_DIR if writable; fall back to a temp dir otherwise.
+
+    Under systemd we get `/var/lib/pytremor` from StateDirectory=. When run
+    by hand as a normal user that path may not exist — degrade gracefully
+    to a per-user fallback so the resilience layer never crashes the lamp.
+    """
+    global CACHE_DIR
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        # Probe write access
+        with tempfile.NamedTemporaryFile(dir=CACHE_DIR, delete=True):
+            pass
+        return CACHE_DIR
+    except (OSError, PermissionError):
+        fallback = os.path.join(tempfile.gettempdir(), "pytremor_cache")
+        os.makedirs(fallback, exist_ok=True)
+        CACHE_DIR = fallback
+        return CACHE_DIR
+
+
+def _cache_path(net, sta, loc, ch, t_end):
+    """Deterministic filename per station + end-time bucket."""
+    ts = UTCDateTime(t_end).datetime.strftime("%Y%m%dT%H%M%SZ")
+    return os.path.join(CACHE_DIR, f"cache_{net}_{sta}_{loc}_{ch}_{ts}.mseed")
+
+
+def _save_cache(stream, path):
+    """Atomic mseed write so a crash mid-write never leaves a partial file."""
+    try:
+        tmp = path + ".tmp"
+        stream.write(tmp, format="MSEED")
+        os.replace(tmp, path)
+        # Trim oldest files beyond CACHE_MAX_FILES
+        files = sorted(
+            glob.glob(os.path.join(CACHE_DIR, "cache_*.mseed")),
+            key=os.path.getmtime,
+        )
+        for old in files[:-CACHE_MAX_FILES]:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+    except Exception as e:
+        print(f"    -> cache save failed: {type(e).__name__}: {e}", flush=True)
+
+
+def _load_latest_cache():
+    """Return (stream, station_tuple) for the newest cached window, or None.
+
+    Used when every live FDSN station fails. Keeps the installation alive
+    on real seismic data instead of falling back to ambient pulse.
+    """
+    files = sorted(
+        glob.glob(os.path.join(CACHE_DIR, "cache_*.mseed")),
+        key=os.path.getmtime,
+        reverse=True,
+    )
+    for path in files:
+        try:
+            st = obspy_read(path)
+            # Filename format: cache_NET_STA_LOC_CH_TIMESTAMP.mseed
+            stem = os.path.basename(path)[:-len(".mseed")].split("_")
+            # stem == ["cache", NET, STA, LOC, CH, TIMESTAMP]
+            if len(stem) >= 5:
+                _, net, sta, loc, ch = stem[0], stem[1], stem[2], stem[3], stem[4]
+            else:
+                tr0 = st[0]
+                net, sta = tr0.stats.network, tr0.stats.station
+                loc, ch  = tr0.stats.location, tr0.stats.channel
+            return st, (net, sta, loc, ch), path
+        except Exception as e:
+            print(f"    -> bad cache file {path}: {e}", flush=True)
+            continue
+    return None
+
+
 def fetch_stream(client, t_end):
     """Download FETCH_HOURS up to t_end (minus the realtime lag), processed.
 
     Tries each station in STATIONS in order; returns the first one that
-    returns data.  Returns (data, sr, station_tuple).
+    returns data. If ALL stations fail (network outage, EarthScope down),
+    falls back to the most recent successfully-cached miniSEED on disk so
+    the lamp keeps tremoring on real seismic data. Returns (data, sr,
+    station_tuple, source_label) where source_label is "live" or "cache".
     """
     t_end   = t_end - FETCH_LAG_SEC
     t_start = t_end - FETCH_HOURS * 3600
@@ -109,6 +201,9 @@ def fetch_stream(client, t_end):
             print(f"    -> no data ({type(e).__name__}); trying next station")
             last_err = e
             continue
+        # Cache the RAW stream BEFORE filtering so a future replay can
+        # apply the same processing chain consistently.
+        _save_cache(st.copy(), _cache_path(net, sta, loc, ch, t_end))
         st.merge(fill_value="interpolate")
         st.detrend("demean")
         st.filter("bandpass", freqmin=BANDPASS_MIN, freqmax=BANDPASS_MAX,
@@ -121,8 +216,34 @@ def fetch_stream(client, t_end):
         print(f"  Got {len(data)} samples @ {sr:.0f} Hz "
               f"({len(data)/sr/60:.1f} min, peak abs={peak:.3g})",
               flush=True)
-        return data, sr, (net, sta, loc, ch)
-    raise RuntimeError(f"No station returned data. Last error: {last_err}")
+        return data, sr, (net, sta, loc, ch), "live"
+
+    # --- All live stations failed: fall back to local cache ---------------
+    print(f"  ! All {len(STATIONS)} stations failed. Last error: {last_err}",
+          flush=True)
+    cached = _load_latest_cache()
+    if cached is None:
+        raise RuntimeError(
+            f"No station returned data and no cached miniSEED available. "
+            f"Last error: {last_err}"
+        )
+    st, station, path = cached
+    print(f"  ↻ Falling back to cached {station[0]}.{station[1]}."
+          f"{station[2]}.{station[3]} from {os.path.basename(path)}",
+          flush=True)
+    st.merge(fill_value="interpolate")
+    st.detrend("demean")
+    st.filter("bandpass", freqmin=BANDPASS_MIN, freqmax=BANDPASS_MAX,
+              corners=4, zerophase=True)
+    tr = st[0]
+    data = tr.data.astype(np.float32)
+    sr   = float(tr.stats.sampling_rate)
+    peak = float(np.max(np.abs(data))) or 1.0
+    data = data / peak
+    print(f"  Got {len(data)} cached samples @ {sr:.0f} Hz "
+          f"({len(data)/sr/60:.1f} min, peak abs={peak:.3g})",
+          flush=True)
+    return data, sr, station, "cache"
 
 
 def spectrum_bands(window, sr, edges):
@@ -178,8 +299,10 @@ def run(pi):
     n_bands = len(LED_PINS)
     edges   = _band_edges(n_bands, BANDPASS_MIN, BANDPASS_MAX)
 
+    cache_dir = _ensure_cache_dir()
     print(f"=== UNDERWATER TREMOR — live seismic LED driver ===")
     print(f"    Stations   : {[s[1] for s in STATIONS]} (in fallback order)")
+    print(f"    Cache dir  : {cache_dir}")
     print(f"    Bandpass   : {BANDPASS_MIN}–{BANDPASS_MAX} Hz "
           f"split into {n_bands} log bands")
     print(f"    Outputs    : {LED_PINS}")
@@ -196,12 +319,12 @@ def run(pi):
 
     # Initial fetch
     try:
-        data, sr, active = fetch_stream(client, UTCDateTime.now())
+        data, sr, active, source = fetch_stream(client, UTCDateTime.now())
     except Exception as e:
         print(f"  ! initial fetch failed: {e}")
         ambient_pulse(pi, 20)
-        data, sr, active = fetch_stream(client, UTCDateTime.now())
-    print(f"    Active station: {active[0]}.{active[1]}.{active[2]}.{active[3]}\n")
+        data, sr, active, source = fetch_stream(client, UTCDateTime.now())
+    print(f"    Active station: {active[0]}.{active[1]}.{active[2]}.{active[3]} ({source})\n")
 
     win_samples   = int(SPECTRUM_WIN * sr)
     advance_per_frame = (SPEED_FACTOR * UPDATE_INTERVAL) * sr   # seismic samples per visual frame
@@ -213,7 +336,7 @@ def run(pi):
         seconds_left = (len(data) - cursor) / sr
         if seconds_left < REFETCH_MARGIN:
             try:
-                data, sr, active = fetch_stream(client, UTCDateTime.now())
+                data, sr, active, source = fetch_stream(client, UTCDateTime.now())
                 cursor = float(win_samples)
                 win_samples = int(SPECTRUM_WIN * sr)
                 advance_per_frame = (SPEED_FACTOR * UPDATE_INTERVAL) * sr

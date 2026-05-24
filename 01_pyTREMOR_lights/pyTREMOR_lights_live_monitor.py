@@ -21,6 +21,7 @@ import os
 import re
 import sys
 import json
+import time
 import subprocess
 import threading
 import queue
@@ -50,6 +51,12 @@ LOG_PATH         = "/var/log/pytremor_lights.log"
 GEOM_FILE        = os.path.join(
     os.path.expandvars(r"%APPDATA%") or os.path.expanduser("~"),
     "pyTREMOR_monitor_geometry.json",
+)
+# Persisted last successfully-fetched overview (instant repaint on next launch
+# instead of an empty overview panel while the FDSN fetch is in flight).
+OVERVIEW_CACHE_FILE = os.path.join(
+    os.path.expandvars(r"%APPDATA%") or os.path.expanduser("~"),
+    "pyTREMOR_last_overview.npz",
 )
 HISTORY_SEC      = 60.0
 FPS_ASSUMED      = 20      # pyTREMOR_lights01 writes ~20 frames / s
@@ -152,72 +159,142 @@ def overview_thread(req_q, ui_q, stop_event):
         try:
             mat, dur, label = compute_overview(net, sta, loc, ch, t0, t1)
             ui_q.put(("overview", (mat, dur, label)))
+            # Persist for next launch so the overview panel is never blank
+            # on startup. We save the latest successful fetch only —
+            # smaller is fine; the operator can see "this is yesterday's
+            # cache" the moment a fresh fetch lands.
+            try:
+                np.savez_compressed(
+                    OVERVIEW_CACHE_FILE,
+                    mat=mat, dur=np.float32(dur),
+                    label=np.array(label), ts=np.float64(time.time()),
+                )
+            except Exception:
+                pass
         except Exception as e:
             ui_q.put(("overview_err", f"{type(e).__name__}: {e}"))
+
+
+def _load_cached_overview():
+    """Return (mat, dur, label, age_seconds) or None if no cache on disk."""
+    try:
+        with np.load(OVERVIEW_CACHE_FILE, allow_pickle=False) as z:
+            mat   = np.asarray(z["mat"], dtype=np.float32)
+            dur   = float(z["dur"])
+            label = str(z["label"])
+            ts    = float(z["ts"])
+        age = max(0.0, time.time() - ts)
+        return mat, dur, label, age
+    except (FileNotFoundError, OSError, KeyError, ValueError):
+        return None
 
 
 # ----------------------------------------------------------------------------
 # SSH tail thread
 # ----------------------------------------------------------------------------
-def tail_thread(ssh_dest, q, stop_event):
-    """Spawn `ssh ... tail -F -n 400 /var/log/pytremor_lights.log` and push lines into q."""
+def _spawn_tail(ssh_dest):
+    """Build + launch the ssh tail subprocess. Returns Popen or raises."""
     cmd = [
         "ssh",
         "-i", SSH_KEY,
         "-o", "IdentitiesOnly=yes",
         "-o", "StrictHostKeyChecking=no",
         "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=3",
         "-o", "ConnectTimeout=10",
+        "-o", "BatchMode=yes",
     ]
-    # IPv6 link-local needs -6
     if ":" in ssh_dest.split("@", 1)[-1]:
         cmd.append("-6")
-    # First emit the most recent Fetching lines (so the laptop knows the
-    # current cache window), then keep tailing live with line-buffered
-    # output so each \r-terminated frame from the Pi arrives immediately
-    # (no kernel pipe batching).
     remote = (
         f"grep -a Fetching {LOG_PATH} 2>/dev/null | tail -3 ; "
         f"stdbuf -oL -eL tail -F -n 200 {LOG_PATH}"
     )
     cmd += [ssh_dest, remote]
+    return subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=0,
+    ), cmd
 
-    print("Connecting:", " ".join(cmd))
-    try:
-        # binary mode + raw byte reads so we can split on either \r or \n.
-        # The Pi terminates each frame with \r (carriage return overwrite);
-        # if we used text-mode line iteration we'd block until the next \n
-        # (usually only on BURST / Fetching lines), and frames would arrive
-        # in bursts instead of in real time.
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=0,
-        )
-    except FileNotFoundError:
-        q.put(("error", "ssh not found in PATH — add C:\\Windows\\System32\\OpenSSH"))
-        return
 
-    try:
-        buf = bytearray()
-        while not stop_event.is_set():
-            chunk = proc.stdout.read(256)
-            if not chunk:
-                break
-            buf += chunk
-            # Flush any complete pieces (split on \r or \n, keep the tail).
-            i = 0
-            for j, b in enumerate(buf):
-                if b == 0x0a or b == 0x0d:  # \n or \r
-                    piece = bytes(buf[i:j]).decode("utf-8", errors="replace").strip()
-                    if piece:
-                        q.put(("line", piece))
-                    i = j + 1
-            del buf[:i]
-    finally:
-        proc.terminate()
-        q.put(("error", "ssh tail ended"))
+def tail_thread(ssh_dest, q, stop_event):
+    """Tail the Pi log over SSH with automatic reconnect.
+
+    Each connection attempt runs `ssh ... tail -F /var/log/pytremor_lights.log`.
+    If ssh exits (Pi rebooted, WiFi dropped, key auth glitch, logrotate
+    misbehaved, sleep/resume on the laptop, …) we wait `backoff` seconds
+    and try again. Backoff grows 5 → 10 → 20 → 40 → 60 s capped, so brief
+    outages reconnect fast and long outages don't hammer ssh in a loop.
+    The UI sees `("status", "...")` messages describing each retry so the
+    operator always knows whether the wire is silent because of an outage
+    or because the Pi script is genuinely paused.
+    """
+    backoff = 5
+    BACKOFF_MAX = 60
+    first_attempt = True
+    while not stop_event.is_set():
+        try:
+            proc, cmd = _spawn_tail(ssh_dest)
+        except FileNotFoundError:
+            q.put(("error", "ssh not found in PATH — add C:\\Windows\\System32\\OpenSSH"))
+            return
+        except Exception as e:
+            q.put(("status", f"ssh spawn failed: {e}; retrying in {backoff}s"))
+            if stop_event.wait(backoff):
+                return
+            backoff = min(BACKOFF_MAX, backoff * 2)
+            continue
+
+        if first_attempt:
+            print("Connecting:", " ".join(cmd))
+            first_attempt = False
+        else:
+            q.put(("status", "ssh reconnected — resuming tail"))
+
+        try:
+            buf = bytearray()
+            got_any = False
+            while not stop_event.is_set():
+                chunk = proc.stdout.read(256)
+                if not chunk:
+                    break
+                got_any = True
+                buf += chunk
+                i = 0
+                for j, b in enumerate(buf):
+                    if b == 0x0a or b == 0x0d:  # \n or \r
+                        piece = bytes(buf[i:j]).decode("utf-8", errors="replace").strip()
+                        if piece:
+                            q.put(("line", piece))
+                        i = j + 1
+                del buf[:i]
+        finally:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        if stop_event.is_set():
+            return
+
+        # If we actually got data this connection, reset backoff so a
+        # transient drop reconnects fast. If we got nothing, the previous
+        # error was probably persistent (wrong key, host unreachable) and
+        # we should back off harder.
+        if got_any:
+            backoff = 5
+        q.put(("status",
+               f"ssh tail dropped — reconnecting in {backoff}s "
+               f"(tail will resume from latest log frame)"))
+        if stop_event.wait(backoff):
+            return
+        backoff = min(BACKOFF_MAX, backoff * 2)
 
 
 # ----------------------------------------------------------------------------
@@ -462,6 +539,14 @@ def run_ui(q, req_q=None):
                 status_txt.set_text(f"!! {payload}")
                 continue
 
+            if kind == "status":
+                # Non-fatal connection messages (reconnecting, dropped, …)
+                # — surface them in the small overview status line so the
+                # main status text keeps the most recent frame readout.
+                overview_status_txt.set_text(payload)
+                state["connected"] = False
+                continue
+
             if kind == "overview":
                 mat, dur, label = payload
                 ov_im.set_data(mat)
@@ -643,6 +728,19 @@ def run_ui(q, req_q=None):
     except Exception:
         pass
     fig.canvas.mpl_connect("close_event", _save_geometry)
+
+    # If a previous run cached an overview, push it into the queue so the
+    # overview panel paints immediately on startup instead of staying blank
+    # for the ~15 s FDSN fetch. It will be overwritten as soon as the live
+    # fetch resolves; the stale-age is reflected in the status line.
+    cached_ov = _load_cached_overview()
+    if cached_ov is not None:
+        c_mat, c_dur, c_label, c_age = cached_ov
+        q.put(("overview", (c_mat, c_dur, c_label)))
+        mins = int(c_age // 60)
+        q.put(("overview_status",
+               f"showing cached overview ({mins} min old) — "
+               f"waiting for live fetch \u2026"))
 
     # 60 fps cap; blit + throttled heavy panels keep CPU low.
     ani = FuncAnimation(fig, update, interval=16, blit=True, cache_frame_data=False)
