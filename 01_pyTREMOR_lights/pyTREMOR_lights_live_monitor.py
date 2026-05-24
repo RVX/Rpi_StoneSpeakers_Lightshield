@@ -474,11 +474,12 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
 
     # --- bars panel --------------------------------------------------------
     band_labels = [f"{BAND_EDGES[i]:.1f}–{BAND_EDGES[i+1]:.1f} Hz" for i in range(8)]
-    # Compact 1-line tick labels so 8 of them never overlap each other or
-    # spill onto the panel below. Detailed Hz info still lives in the LED
+    # Compact 2-line tick labels. Uses 1-decimal so neighbouring bands stay
+    # visibly distinct (geomspace 1–18 Hz rounds to 1–1, 1–2, 2–3, … with
+    # :.0f, which is unreadable). Detailed Hz info also lives in the LED
     # value labels above the bars + the L1–L8 ids in the waterfall.
     short_band_labels = [
-        f"L{i+1}\n{BAND_EDGES[i]:.0f}–{BAND_EDGES[i+1]:.0f}"
+        f"L{i+1}\n{BAND_EDGES[i]:.1f}–{BAND_EDGES[i+1]:.1f} Hz"
         for i in range(8)
     ]
     bars = ax_bars.bar(
@@ -527,14 +528,17 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     ax_bars.set_xticks(range(8))
     ax_bars.set_xticklabels(
         short_band_labels,
-        fontsize=7.5, color=TEXT_MUTED,
+        fontsize=7, color=TEXT_MUTED,
     )
     ax_bars.tick_params(axis="x", pad=18)   # leave room for LED circles
     ax_bars.set_yticks([0, 25, 50, 75, 100])
-    ax_bars.set_ylabel("brightness  (%)", color=TEXT_MUTED, fontsize=9)
-    ax_bars.set_title("current LED output  ·  live lamp preview",
-                      color=TEXT_PRIMARY, fontsize=11, pad=10,
-                      fontweight="bold", loc="center")
+    ax_bars.set_ylabel("LED brightness  (%)", color=TEXT_MUTED, fontsize=9)
+    ax_bars.set_title(
+        "LED output L1–L8  ·  one bar = brightness of one seismic frequency band\n"
+        "low bands (L1–L3 ≈ 1–3 Hz) = deep tremor  ·  high bands (L6–L8 ≈ 6–18 Hz) = sharp bursts",
+        color=TEXT_PRIMARY, fontsize=10, pad=10,
+        fontweight="bold", loc="center",
+    )
     ax_bars.grid(axis="y", color=GRID_COLOR, alpha=0.5, linewidth=0.6)
     ax_bars.set_axisbelow(True)
 
@@ -549,10 +553,13 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     ax_water.set_yticks(range(1, 9))
     ax_water.set_yticklabels([f"L{i+1}" for i in range(8)],
                              color=TEXT_MUTED, fontsize=8)
-    ax_water.set_xlabel("seconds ago", color=TEXT_MUTED, fontsize=9)
-    ax_water.set_title("per-band history  ·  60 s waterfall",
-                       color=TEXT_PRIMARY, fontsize=11, pad=10,
-                       fontweight="bold", loc="center")
+    ax_water.set_xlabel("time  (seconds ago  →  now)", color=TEXT_MUTED, fontsize=9)
+    ax_water.set_title(
+        "per-band history  ·  60 s waterfall\n"
+        "each row = one LED (L1 low → L8 high)  ·  colour = brightness %",
+        color=TEXT_PRIMARY, fontsize=10, pad=10,
+        fontweight="bold", loc="center",
+    )
     cbar = fig.colorbar(im, ax=ax_water, fraction=0.035, pad=0.015)
     cbar.outline.set_edgecolor(GRID_COLOR)
     cbar.ax.tick_params(colors=TEXT_MUTED, labelsize=8, length=2)
@@ -566,11 +573,14 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         ax_cen.axhline(edge, color=GRID_COLOR, lw=0.5, alpha=0.6)
     ax_cen.set_ylim(BAND_EDGES[0], BAND_EDGES[-1])
     ax_cen.set_xlim(-HISTORY_SEC, 0)
-    ax_cen.set_xlabel("seconds ago", color=TEXT_MUTED, fontsize=9)
-    ax_cen.set_ylabel("centroid  (Hz)", color=TEXT_MUTED, fontsize=9)
-    ax_cen.set_title("spectral centroid  →  PWM frequency",
-                     color=TEXT_PRIMARY, fontsize=11, pad=10,
-                     fontweight="bold", loc="center")
+    ax_cen.set_xlabel("time  (seconds ago  →  now)", color=TEXT_MUTED, fontsize=9)
+    ax_cen.set_ylabel("spectral centroid  (Hz)", color=TEXT_MUTED, fontsize=9)
+    ax_cen.set_title(
+        "spectral centroid  →  PWM flicker frequency\n"
+        "centroid = the ‘centre of mass’ of the seismic spectrum  ·  drives the LED PWM rate",
+        color=TEXT_PRIMARY, fontsize=10, pad=10,
+        fontweight="bold", loc="center",
+    )
     ax_cen.grid(color=GRID_COLOR, alpha=0.4, linewidth=0.6)
     ax_cen.set_axisbelow(True)
 
@@ -593,11 +603,16 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     ax_overview.set_yticks(range(1, 9))
     ax_overview.set_yticklabels([f"L{i+1}" for i in range(8)],
                                 color=TEXT_MUTED, fontsize=8)
-    ax_overview.set_xlabel("seconds into seismic cache  ·  blue line = current replay position",
-                           color=TEXT_MUTED, fontsize=9)
-    ax_overview.set_title("overall sonification  ·  full seismic cache",
-                          color=TEXT_PRIMARY, fontsize=11, pad=10,
-                          fontweight="bold", loc="center")
+    ax_overview.set_xlabel(
+        "time inside the 1-hour seismic cache  (seconds)  ·  blue line = current replay position",
+        color=TEXT_MUTED, fontsize=9,
+    )
+    ax_overview.set_title(
+        "full sonification preview  ·  what the lamp will play across the whole cache\n"
+        "rows = LEDs L1–L8  ·  colour = upcoming brightness per band along the hour",
+        color=TEXT_PRIMARY, fontsize=10, pad=10,
+        fontweight="bold", loc="center",
+    )
 
     # --- status strip (sits between the header texts and the plots) ------
     # Three centered rows on ax_status (gs[0, :]) so the operator scans
