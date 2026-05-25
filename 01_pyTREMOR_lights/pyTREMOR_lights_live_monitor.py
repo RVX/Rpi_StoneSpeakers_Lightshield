@@ -623,14 +623,14 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         "… querying pi telemetry …",
         ha="right", va="top",
         fontsize=7.5, color=TEXT_MUTED, family="monospace", alpha=0.85,
-        linespacing=1.15,
+        linespacing=0.95,
     )
     pi_op_txt = fig.text(
         0.015, 0.965,
         "… waiting for first log line …",
         ha="left", va="top",
         fontsize=7.5, color=TEXT_MUTED, family="monospace", alpha=0.85,
-        linespacing=1.15,
+        linespacing=0.95,
     )
     ax_bars     = fig.add_subplot(gs[1:3, 0])
     ax_water    = fig.add_subplot(gs[1,   1])
@@ -914,11 +914,15 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
             else:
                 health_col = TEXT_MUTED
             health_lines = [
-                f"svc:  {svc:<10s}  thr: {thr_label}",
-                f"ip:   {info.get('IP', '?'):<14s}  rtt: {info.get('RTT', '?')}s",
-                f"temp: {temp}\u00b0C",
-                f"load: {info.get('LOAD', '?'):<10s}  mem: {info.get('MEM', '?')}",
-                f"disk: {info.get('DISK', '?'):<10s}  up:  {info.get('UP', '?')}",
+                f"svc:    {svc}",
+                f"ip:     {info.get('IP', '?')}",
+                f"rtt:    {info.get('RTT', '?')}s",
+                f"temp:   {temp}\u00b0C",
+                f"load:   {info.get('LOAD', '?')}",
+                f"mem:    {info.get('MEM', '?')}",
+                f"disk:   {info.get('DISK', '?')}",
+                f"up:     {info.get('UP', '?')}",
+                f"thr:    {thr_label}",
                 f"err24h: {errs}",
             ]
             health_text = "\n".join(health_lines)
@@ -949,9 +953,10 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
             op_col = "#ff7c3a"
         eta = _fmt_eta(state["window_dur_s"], state["last_cur"])
         op_lines = [
-            f"last log:    {_fmt_age(age)}",
-            f"fdsn:        {src}   ·  next fetch in {eta}",
-            f"reconnects:  {state['reconnect_count']}",
+            f"last log:   {_fmt_age(age)}",
+            f"fdsn:       {src}",
+            f"next fetch: {eta}",
+            f"reconnects: {state['reconnect_count']}",
         ]
         op_text = "\n".join(op_lines)
         # Only update + redraw when content changes (or forced)
