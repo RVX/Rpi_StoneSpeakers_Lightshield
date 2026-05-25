@@ -373,6 +373,31 @@ def _ordinal_word(n):
     return f"{n}{suffix}"
 
 
+_UPTIME_RE = re.compile(
+    r"(?:(\d+)\s*(?:weeks?|w)\b)?[, ]*"
+    r"(?:(\d+)\s*(?:days?|d)\b)?[, ]*"
+    r"(?:(\d+)\s*(?:hours?|h)\b)?[, ]*"
+    r"(?:(\d+)\s*(?:minutes?|min|m)\b)?",
+    re.IGNORECASE,
+)
+
+
+def _fmt_uptime(s):
+    """Compact `uptime -p` output -> e.g. '3h 12m' / '2d 4h' / '45m'."""
+    if not s or s == "?":
+        return "?"
+    m = _UPTIME_RE.search(s)
+    if not m or not any(m.groups()):
+        return s
+    w, d, h, mi = (int(x) if x else 0 for x in m.groups())
+    parts = []
+    if w: parts.append(f"{w}w")
+    if d: parts.append(f"{d}d")
+    if h: parts.append(f"{h}h")
+    if mi or not parts: parts.append(f"{mi}m")
+    return " ".join(parts[:2])
+
+
 def pi_health_thread(ssh_dest, q, stop_event, period=30.0):
     """Poll Pi telemetry every `period` seconds and push to the UI.
 
@@ -932,15 +957,15 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
             else:
                 health_col = TEXT_MUTED
             health_lines = [
-                f"svc:    {svc}",
-                f"ip:     {info.get('IP', '?')}",
-                f"rtt:    {info.get('RTT', '?')}s",
-                f"temp:   {temp}\u00b0C",
-                f"load:   {info.get('LOAD', '?')}",
-                f"mem:    {info.get('MEM', '?')}",
-                f"disk:   {info.get('DISK', '?')}",
-                f"up:     {info.get('UP', '?')}",
-                f"thr:    {thr_label}",
+                f"svc: {svc}",
+                f"ip: {info.get('IP', '?')}",
+                f"rtt: {info.get('RTT', '?')}s",
+                f"temp: {temp}\u00b0C",
+                f"load: {info.get('LOAD', '?')}",
+                f"mem: {info.get('MEM', '?')}",
+                f"disk: {info.get('DISK', '?')}",
+                f"up: {_fmt_uptime(info.get('UP', '?'))}",
+                f"thr: {thr_label}",
                 f"err24h: {errs}",
             ]
             health_text = "\n".join(health_lines)
