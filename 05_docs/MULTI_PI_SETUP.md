@@ -112,26 +112,57 @@ python 01_pyTREMOR_lights\pyTREMOR_lights_live_monitor.py sjc1@sjc2.local
 Window positions are persisted per-process, so once arranged on screen
 they reopen in the same layout.
 
-Each monitor window also shows a live **Pi telemetry block** in the
-top-right corner, refreshed every 30 s via a single SSH round-trip:
+Each monitor window also shows two telemetry blocks in its header,
+refreshed automatically:
+
+**Right — hardware/system snapshot** (one SSH round-trip every 30 s):
 
 ```
-svc:  active
-ip:   192.168.1.42
+svc:  active        thr: ok
+ip:   192.168.1.42  rtt: 0.42s
 temp: 52.3°C
-up:   3 hours, 12 minutes
-load: 0.45  mem: 234/3848M
-disk: 12%   err24h: 0
+load: 0.45          mem: 234/3848M
+disk: 12%           up:  3 hours, 12 minutes
+err24h: 0
 ```
 
-Colour cues make problems visible at a glance across the 5-Pi wall:
+- `thr` decodes `vcgencmd get_throttled`: `ok` / `under-volt (latched)`
+  / `throttled NOW` etc. so you can spot a flaky PSU or thermal cap
+  that wouldn't otherwise show up in service logs.
+- `rtt` is the SSH round-trip time for the snapshot — useful when
+  debugging IPv6 link-local quirks.
+- `err24h` counts `journalctl -u pytremor_lights -p err` over 24 h.
 
-| Condition                                   | Colour       |
-|---------------------------------------------|--------------|
-| Healthy (`svc=active`, no errors, < 70 °C)  | muted grey   |
-| Errors in last 24 h, or CPU ≥ 70 °C          | orange       |
-| `svc != active`                              | red          |
-| SSH snapshot failed (Pi unreachable)        | orange, text reads `pi offline (ssh failed)` |
+**Left — operational state of the lamp** (derived from the log stream,
+no extra SSH calls):
+
+```
+last log:    1.2s ago
+fdsn:        live   ·  next fetch in 23m42s
+reconnects:  0
+```
+
+- `last log` ticks live; goes **orange after 2 min** and **red after
+  5 min** of silence — the fastest possible alert that a Pi has frozen.
+- `fdsn` is one of `live` / `cache` / `cache (fallback)` /
+  `failed (using cache)` / `fetching`. `live` = streaming from
+  EarthScope, `cache (fallback)` = FDSN failed mid-run, `failed` = both
+  failed and the lamp is replaying stale data.
+- `next fetch in` counts down to the Pi's next hourly FDSN download,
+  derived from the cached window duration and current replay position.
+- `reconnects` is how many times this monitor session has had to
+  re-spawn the ssh tail — spikes indicate an unstable link.
+
+Colour cues across both blocks:
+
+| Condition                                                  | Colour |
+|------------------------------------------------------------|--------|
+| Healthy                                                    | muted grey |
+| Errors in last 24 h, CPU ≥ 70 °C, throttling latched,      | orange |
+| FDSN in fallback, or > 2 min log silence                   |        |
+| `svc != active`, throttling **now**, FDSN failed, or       | red    |
+| > 5 min log silence                                        |        |
+| SSH snapshot failed (Pi unreachable)                       | orange, text reads `pi offline (ssh failed)` |
 
 The telemetry SSH call uses `BatchMode=yes` and an 8 s connect timeout,
 so a missing Pi cannot stall the UI.

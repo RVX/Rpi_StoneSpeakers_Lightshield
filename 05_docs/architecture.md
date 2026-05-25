@@ -67,16 +67,25 @@ flowchart TB
   - `overview_thread` — downloads the same FDSN window locally with
     `obspy` and computes the big background spectrogram.
   - `pi_health_thread` — every 30 s runs one short SSH command on the
-    Pi that bundles `vcgencmd`-free reads of
-    `/sys/class/thermal/thermal_zone0/temp`, `hostname -I`,
-    `systemctl is-active pytremor_lights`, `uptime -p`, `/proc/loadavg`,
-    `free -m`, `df -h /`, and a 24 h error count from
-    `journalctl -u pytremor_lights -p err`. Result is rendered as a
-    small multi-line block in the top-right of the window (under the
-    SSH destination), with colour cues: muted-grey when healthy,
-    orange when there are errors in the last 24 h or CPU ≥ 70 °C, red
-    when the service is not `active`, and “pi offline (ssh failed)” if
-    the snapshot times out.
+    Pi that bundles reads of `/sys/class/thermal/thermal_zone0/temp`,
+    `hostname -I`, `systemctl is-active pytremor_lights`, `uptime -p`,
+    `/proc/loadavg`, `free -m`, `df -h /`, `vcgencmd get_throttled`
+    (hex bitmask for under-volt / freq-cap / thermal events, both
+    current and latched-since-boot), and a 24 h error count from
+    `journalctl -u pytremor_lights -p err`. The call's own round-trip
+    time is recorded as `rtt`. Result is rendered in the **right-hand
+    telemetry block** in the top corner. Colour cues: muted-grey when
+    healthy, orange when there are errors in the last 24 h or CPU
+    ≥ 70 °C or throttling events are latched, red when the service is
+    not `active` or throttling is *currently* happening, and
+    “pi offline (ssh failed)” if the snapshot times out.
+  - The **left-hand operational block** is derived purely from the log
+    stream (no extra SSH calls): seconds since the last log line
+    (“last log: 1.2s ago” — orange > 2 min, red > 5 min), FDSN source
+    (`live` / `cache` / `cache (fallback)` / `failed (using cache)` /
+    `fetching`), the next-fetch ETA computed from the cached window
+    duration and the current replay position, and the number of times
+    `tail_thread` has had to re-spawn ssh in this session.
 - **`run_ui`** drains the queue at 60 fps with `blit=True`. Only the LED
   preview row updates every frame; heavier panels (waterfall, overview,
   status text) have their data refreshed on a throttle but are always
