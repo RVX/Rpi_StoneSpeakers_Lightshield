@@ -173,3 +173,30 @@ Software resilience cannot protect the SD card itself against bit-rot
 or write fatigue. Recommended: every few months, image the cards back
 to disk on the laptop (`Win32DiskImager` → Read) and keep one good
 copy per Pi.
+
+## 9. Future work — friendly-name overlay (deferred)
+
+The monitor header currently shows the raw IPv6 link-local + decoded
+MAC, e.g.:
+
+```
+fe80::…9f99%19
+mac 88:a2:9e:d7:9f:99
+```
+
+For the gallery install this is operator-facing noise. A small static
+map keyed by MAC (or by host short-name) would replace it with a
+human label such as `STATION 1 — Stromboli`. Suggested location:
+constant at top of `pyTREMOR_lights_live_monitor.py`, e.g.
+
+```python
+PI_FRIENDLY_NAMES = {
+    "88:a2:9e:d7:9f:99": "STATION 1 — Stromboli",
+    # …fill once final MACs are known
+}
+```
+
+`_pi_label()` would consult it and fall back to the current MAC line
+when the host isn't in the map. Deferred until all 5 Pis are imaged
+and their MACs are recorded.
+
