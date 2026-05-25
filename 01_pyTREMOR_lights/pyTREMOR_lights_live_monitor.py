@@ -116,6 +116,26 @@ FETCH_RE = re.compile(
     r"(\S+Z)\s+\S+\s+(\S+Z)"
 )
 BURST_RE = re.compile(r"!\s*BURST\s+rms=([\d.]+)\s+centroid=([\d.]+)Hz")
+# Pi log emits one of these after every successful waveform load:
+#   "  Got 144000 samples @ 40 Hz (60.0 min, peak abs=1.23e+04)"  -- live
+#   "  Got 144000 cached samples @ 40 Hz (60.0 min, peak abs=1.23e+04)" -- cache
+# We capture the duration (minutes) so we can compute the next-fetch ETA,
+# and the optional "cached" word so we know if the lamp is on live data.
+GOT_RE = re.compile(
+    r"Got\s+\d+\s+(cached\s+)?samples\s+@\s*[\d.]+\s*Hz\s+\(([\d.]+)\s*min"
+)
+# Pi-side fetch-failure markers. Any of these means FDSN is down; the lamp
+# will be running on cached data.
+FAIL_RE = re.compile(
+    r"!\s*(initial fetch failed|refetch failed|All\s+\d+\s+stations failed|"
+    r"FDSN client init failed)"
+)
+# Explicit cache-mode log lines ("↻ Replaying cached ..." at startup when
+# FDSN was unreachable, "↻ Falling back to cached ..." mid-run).
+CACHE_MODE_RE = re.compile(r"↻\s*(Replaying|Falling back to)\s+cached")
+# Mirrors REFETCH_MARGIN in pyTREMOR_lights01.py — the Pi re-downloads this
+# many seconds before the cached window ends. Used to estimate next-fetch ETA.
+REFETCH_MARGIN_SEC = 60
 
 
 def parse_frame(line):
@@ -245,7 +265,9 @@ def _pi_health_snapshot(ssh_dest):
     ]
     if ":" in ssh_dest.split("@", 1)[-1]:
         cmd.append("-6")
-    # Single bundled shell command (one ssh round-trip).
+    # Single bundled shell command (one ssh round-trip). THR is the raw
+    # vcgencmd get_throttled bitmask — lets us see both *current* under-volt
+    # / freq-cap / thermal events and *latched* past events (bits 16-19).
     remote = (
         "echo TEMP=$(awk '{printf \"%.1f\",$1/1000}' "
         "/sys/class/thermal/thermal_zone0/temp 2>/dev/null); "
@@ -256,12 +278,14 @@ def _pi_health_snapshot(ssh_dest):
         "echo MEM=$(free -m | awk '/^Mem:/ {printf \"%d/%dM\",$3,$2}'); "
         "echo DISK=$(df -h / | awk 'NR==2 {print $5}'); "
         "echo ERR24=$(journalctl -u pytremor_lights --since '24h ago' "
-        "-p err --no-pager 2>/dev/null | grep -v -- '-- ' | wc -l)"
+        "-p err --no-pager 2>/dev/null | grep -v -- '-- ' | wc -l); "
+        "echo THR=$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)"
     )
     cmd += [ssh_dest, remote]
     creation = 0
     if os.name == "nt":
         creation = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    t0 = time.perf_counter()
     try:
         out = subprocess.check_output(
             cmd, timeout=15,
@@ -272,12 +296,63 @@ def _pi_health_snapshot(ssh_dest):
         )
     except Exception:
         return None
-    info = {}
+    rtt = time.perf_counter() - t0
+    info = {"RTT": f"{rtt:.2f}"}
     for ln in out.decode("utf-8", "replace").splitlines():
         if "=" in ln:
             k, _, v = ln.partition("=")
             info[k.strip()] = v.strip()
-    return info or None
+    return info if len(info) > 1 else None
+
+
+def _fmt_throttled(hex_str):
+    """Translate vcgencmd get_throttled hex bitmask into a short label.
+
+    Returns (label, severity) where severity is "ok"/"warn"/"crit". A
+    *current* event (bits 0-3) is critical — it's happening now and the
+    Pi is degraded right this second. A *latched* event (bits 16-19) is
+    a warning — it happened at some point since boot but isn't active,
+    typically a flaky PSU sag at startup or a hot day past.
+    """
+    try:
+        v = int(hex_str, 16)
+    except (ValueError, TypeError):
+        return ("?", "ok")
+    if v == 0:
+        return ("ok", "ok")
+    now_names  = {0: "under-volt", 1: "freq-cap", 2: "throttled", 3: "soft-temp"}
+    past_names = {16: "under-volt", 17: "freq-cap", 18: "throttled", 19: "soft-temp"}
+    now_flags  = [n for b, n in now_names.items()  if v & (1 << b)]
+    past_flags = [n for b, n in past_names.items() if v & (1 << b)]
+    if now_flags:
+        return ("/".join(now_flags) + " NOW", "crit")
+    return ("/".join(past_flags) + " (latched)", "warn")
+
+
+def _fmt_eta(window_dur_s, cur_s):
+    """Format the time until the Pi will re-download from FDSN."""
+    if not window_dur_s or window_dur_s <= 0 or cur_s is None:
+        return "?"
+    remaining = window_dur_s - REFETCH_MARGIN_SEC - cur_s
+    if remaining <= 0:
+        return "due now"
+    m, s = divmod(int(remaining), 60)
+    if m > 0:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
+
+
+def _fmt_age(secs):
+    """Format ‘time since last log line’ in human units."""
+    if secs is None:
+        return "no data yet"
+    if secs < 60:
+        return f"{secs:.1f}s ago"
+    m, s = divmod(int(secs), 60)
+    if m < 60:
+        return f"{m}m{s:02d}s ago"
+    h, m = divmod(m, 60)
+    return f"{h}h{m:02d}m ago"
 
 
 def pi_health_thread(ssh_dest, q, stop_event, period=30.0):
@@ -355,6 +430,7 @@ def tail_thread(ssh_dest, q, stop_event):
     backoff = 5
     BACKOFF_MAX = 60
     first_attempt = True
+    reconnects = 0
     while not stop_event.is_set():
         try:
             proc, cmd = _spawn_tail(ssh_dest)
@@ -372,6 +448,8 @@ def tail_thread(ssh_dest, q, stop_event):
             print("Connecting:", " ".join(cmd))
             first_attempt = False
         else:
+            reconnects += 1
+            q.put(("reconnect", reconnects))
             q.put(("status", "ssh reconnected — resuming tail"))
 
         try:
@@ -535,16 +613,24 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         ha="right", va="top",
         fontsize=8.5, color=TEXT_MUTED, family="monospace", alpha=0.7,
     )
-    # Pi telemetry block (temperature / IP / service / uptime / load / mem /
-    # disk / 24h error count). Updated every 30 s by pi_health_thread.
-    # Multi-line so each datum sits on its own row; uses fig.text (not an
-    # axes artist) because it only refreshes every 30 s — a full canvas
-    # redraw at that cadence is negligible.
+    # Pi telemetry block: hardware/system snapshot (left column) and
+    # operational state of the lamp itself (right column), refreshed by
+    # pi_health_thread every 30 s plus a tick-based redraw for the live
+    # "last log" age and next-fetch ETA. Two text artists side by side so
+    # we can colour them independently (hardware vs operational state).
     pi_health_txt = fig.text(
         0.985, 0.965,
         "… querying pi telemetry …",
         ha="right", va="top",
-        fontsize=8, color=TEXT_MUTED, family="monospace", alpha=0.85,
+        fontsize=7.5, color=TEXT_MUTED, family="monospace", alpha=0.85,
+        linespacing=1.15,
+    )
+    pi_op_txt = fig.text(
+        0.015, 0.965,
+        "… waiting for first log line …",
+        ha="left", va="top",
+        fontsize=7.5, color=TEXT_MUTED, family="monospace", alpha=0.85,
+        linespacing=1.15,
     )
     ax_bars     = fig.add_subplot(gs[1:3, 0])
     ax_water    = fig.add_subplot(gs[1,   1])
@@ -790,10 +876,98 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         # RGB columns filled once with GLOW_COLOR; only alpha changes each frame.
         "_led_rgba_core": np.zeros((8, 4), dtype=np.float32),
         "_led_rgba_halo": np.zeros((8, 4), dtype=np.float32),
+        # Operational telemetry derived from the log stream + ssh snapshots
+        "pi_health":         None,    # last snapshot dict (svc, ip, temp, …)
+        "last_line_t":       None,    # wall-clock of last log line consumed
+        "fdsn_source":       "—",     # "live" / "cache" / "failed" / …
+        "window_dur_s":      None,    # length of current cached seismic window
+        "reconnect_count":   0,       # ssh tail re-spawn count
+        "_health_prev_text": "",      # text-change diff for draw_idle throttling
+        "_op_prev_text":     "",
     }
     _glow_rgb = np.array(matplotlib.colors.to_rgb(GLOW_COLOR), dtype=np.float32)
     state["_led_rgba_core"][:, :3] = _glow_rgb
     state["_led_rgba_halo"][:, :3] = _glow_rgb
+
+    def _refresh_telemetry(force=False):
+        """Rebuild both telemetry text blocks. Only triggers a canvas
+        redraw if the rendered text actually changed — avoids hammering
+        draw_idle() on every UI tick.
+        """
+        info = state["pi_health"] or {}
+        if info:
+            thr_label, thr_sev = _fmt_throttled(info.get("THR", ""))
+            svc  = info.get("SVC", "?")
+            errs = info.get("ERR24", "0")
+            temp = info.get("TEMP", "?")
+            try:
+                temp_hot = float(temp) >= 70.0
+            except (TypeError, ValueError):
+                temp_hot = False
+            # Severity tiers — worst wins
+            if svc != "active":
+                health_col = "#ff5050"
+            elif thr_sev == "crit":
+                health_col = "#ff5050"
+            elif errs not in ("0", "") or thr_sev == "warn" or temp_hot:
+                health_col = "#ff7c3a"
+            else:
+                health_col = TEXT_MUTED
+            health_lines = [
+                f"svc:  {svc:<10s}  thr: {thr_label}",
+                f"ip:   {info.get('IP', '?'):<14s}  rtt: {info.get('RTT', '?')}s",
+                f"temp: {temp}\u00b0C",
+                f"load: {info.get('LOAD', '?'):<10s}  mem: {info.get('MEM', '?')}",
+                f"disk: {info.get('DISK', '?'):<10s}  up:  {info.get('UP', '?')}",
+                f"err24h: {errs}",
+            ]
+            health_text = "\n".join(health_lines)
+        elif state["pi_health"] is None:
+            health_text = "… querying pi telemetry …"
+            health_col  = TEXT_MUTED
+        else:
+            health_text = "pi offline (ssh failed)"
+            health_col  = "#ff7c3a"
+        # — Operational block (left side) —
+        now = time.time()
+        last_t = state["last_line_t"]
+        age = (now - last_t) if last_t else None
+        # Staleness severity: > 5 min = crit, > 2 min = warn
+        if age is None:
+            op_col = TEXT_MUTED
+        elif age > 300:
+            op_col = "#ff5050"
+        elif age > 120:
+            op_col = "#ff7c3a"
+        else:
+            op_col = TEXT_MUTED
+        src = state["fdsn_source"]
+        # Source colour overrides staleness if worse
+        if src.startswith("failed"):
+            op_col = "#ff5050"
+        elif src.startswith("cache (fallback)"):
+            op_col = "#ff7c3a"
+        eta = _fmt_eta(state["window_dur_s"], state["last_cur"])
+        op_lines = [
+            f"last log:    {_fmt_age(age)}",
+            f"fdsn:        {src}   ·  next fetch in {eta}",
+            f"reconnects:  {state['reconnect_count']}",
+        ]
+        op_text = "\n".join(op_lines)
+        # Only update + redraw when content changes (or forced)
+        changed = False
+        if force or health_text != state["_health_prev_text"]:
+            pi_health_txt.set_text(health_text)
+            pi_health_txt.set_color(health_col)
+            state["_health_prev_text"] = health_text
+            changed = True
+        if force or op_text != state["_op_prev_text"]:
+            pi_op_txt.set_text(op_text)
+            pi_op_txt.set_color(op_col)
+            state["_op_prev_text"] = op_text
+            changed = True
+        if changed:
+            fig.canvas.draw_idle()
 
     def update(_frame):
         while True:
@@ -833,46 +1007,29 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
                 overview_status_txt.set_text(payload)
                 continue
             if kind == "pi_health":
-                if payload is None:
-                    pi_health_txt.set_text("pi offline (ssh failed)")
-                    pi_health_txt.set_color("#ff7c3a")
-                else:
-                    info = payload
-                    svc = info.get("SVC", "?")
-                    errs = info.get("ERR24", "0")
-                    temp = info.get("TEMP", "?")
-                    # Colour: green if active+no errors, orange if errors,
-                    # red if service down. Temperature warning >70C.
-                    if svc != "active":
-                        col = "#ff5050"
-                    elif errs not in ("0", ""):
-                        col = "#ff7c3a"
-                    else:
-                        col = TEXT_MUTED
-                    try:
-                        if float(temp) >= 70.0:
-                            col = "#ff7c3a"
-                    except (TypeError, ValueError):
-                        pass
-                    lines = [
-                        f"svc:  {svc}",
-                        f"ip:   {info.get('IP', '?')}",
-                        f"temp: {temp}\u00b0C",
-                        f"up:   {info.get('UP', '?')}",
-                        f"load: {info.get('LOAD', '?')}"
-                                f"  mem: {info.get('MEM', '?')}",
-                        f"disk: {info.get('DISK', '?')}"
-                                f"  err24h: {errs}",
-                    ]
-                    pi_health_txt.set_text("\n".join(lines))
-                    pi_health_txt.set_color(col)
-                fig.canvas.draw_idle()
+                state["pi_health"] = payload
+                _refresh_telemetry()
+                continue
+            if kind == "reconnect":
+                state["reconnect_count"] = payload
+                _refresh_telemetry()
                 continue
 
             line = payload
             state["connected"] = True
+            state["last_line_t"] = time.time()
+            # FDSN-source detection: scan every log line for outcome markers
+            mg = GOT_RE.search(line)
+            if mg:
+                state["window_dur_s"] = float(mg.group(2)) * 60.0
+                state["fdsn_source"] = "cache" if mg.group(1) else "live"
+            elif CACHE_MODE_RE.search(line):
+                state["fdsn_source"] = "cache (fallback)"
+            elif FAIL_RE.search(line):
+                state["fdsn_source"] = "failed (using cache)"
             mf = FETCH_RE.search(line)
             if mf:
+                state["fdsn_source"] = "fetching"
                 net, sta, loc, ch, t0, t1 = mf.groups()
                 state["station"] = f"{net}.{sta}.{loc}.{ch}"
                 state["fetch_t0"] = t0
@@ -957,6 +1114,13 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         # throttling the *artist membership* would just blink them on/off.
         state["tick"] = state.get("tick", 0) + 1
         tick = state["tick"]
+
+        # Operational telemetry (staleness + ETA) ticks even when nothing
+        # arrives on the queue — so a frozen Pi visibly ages on screen.
+        # ~1 Hz at 60 fps is plenty and the diff-check in _refresh_telemetry
+        # keeps draw_idle() quiet when nothing actually changed.
+        if tick % 60 == 0:
+            _refresh_telemetry()
 
         if tick % 4 == 0:   # ~15 fps data refresh for waterfall + centroid
             im.set_data(waterfall)
