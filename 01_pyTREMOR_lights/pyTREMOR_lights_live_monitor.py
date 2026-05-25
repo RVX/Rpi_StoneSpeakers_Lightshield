@@ -228,6 +228,79 @@ def _load_cached_overview():
 # ----------------------------------------------------------------------------
 # SSH tail thread
 # ----------------------------------------------------------------------------
+def _pi_health_snapshot(ssh_dest):
+    """Run one short remote command bundle returning a dict of telemetry.
+
+    Polls cheap kernel files (no privileged calls), runs in ~1 s. Returns
+    None on any ssh failure so the UI can show a friendly ‘offline’ hint.
+    """
+    cmd = [
+        "ssh",
+        "-i", SSH_KEY,
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "LogLevel=ERROR",
+        "-o", "ConnectTimeout=8",
+        "-o", "BatchMode=yes",
+    ]
+    if ":" in ssh_dest.split("@", 1)[-1]:
+        cmd.append("-6")
+    # Single bundled shell command (one ssh round-trip).
+    remote = (
+        "echo TEMP=$(awk '{printf \"%.1f\",$1/1000}' "
+        "/sys/class/thermal/thermal_zone0/temp 2>/dev/null); "
+        "echo IP=$(hostname -I 2>/dev/null | awk '{print $1}'); "
+        "echo SVC=$(systemctl is-active pytremor_lights 2>/dev/null); "
+        "echo UP=$(uptime -p 2>/dev/null | sed 's/^up //'); "
+        "echo LOAD=$(awk '{print $1}' /proc/loadavg); "
+        "echo MEM=$(free -m | awk '/^Mem:/ {printf \"%d/%dM\",$3,$2}'); "
+        "echo DISK=$(df -h / | awk 'NR==2 {print $5}'); "
+        "echo ERR24=$(journalctl -u pytremor_lights --since '24h ago' "
+        "-p err --no-pager 2>/dev/null | grep -v -- '-- ' | wc -l)"
+    )
+    cmd += [ssh_dest, remote]
+    creation = 0
+    if os.name == "nt":
+        creation = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    try:
+        out = subprocess.check_output(
+            cmd, timeout=15,
+            stderr=subprocess.DEVNULL,
+            creationflags=creation,
+        ) if os.name == "nt" else subprocess.check_output(
+            cmd, timeout=15, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return None
+    info = {}
+    for ln in out.decode("utf-8", "replace").splitlines():
+        if "=" in ln:
+            k, _, v = ln.partition("=")
+            info[k.strip()] = v.strip()
+    return info or None
+
+
+def pi_health_thread(ssh_dest, q, stop_event, period=30.0):
+    """Poll Pi telemetry every `period` seconds and push to the UI.
+
+    Slow cadence on purpose — spawning ssh more often than every ~10 s
+    starts to be visible in the laptop's network/CPU and racing the tail
+    thread's reconnects. 30 s is plenty for temperature and service
+    status drift.
+    """
+    while not stop_event.is_set():
+        info = _pi_health_snapshot(ssh_dest)
+        if info is None:
+            q.put(("pi_health", None))
+        else:
+            q.put(("pi_health", info))
+        # Short-sleep loop so shutdown is responsive.
+        for _ in range(int(period * 10)):
+            if stop_event.is_set():
+                return
+            time.sleep(0.1)
+
+
 def _spawn_tail(ssh_dest):
     """Build + launch the ssh tail subprocess. Returns Popen or raises."""
     cmd = [
@@ -461,6 +534,17 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         0.985, 0.985, pi_long,
         ha="right", va="top",
         fontsize=8.5, color=TEXT_MUTED, family="monospace", alpha=0.7,
+    )
+    # Pi telemetry block (temperature / IP / service / uptime / load / mem /
+    # disk / 24h error count). Updated every 30 s by pi_health_thread.
+    # Multi-line so each datum sits on its own row; uses fig.text (not an
+    # axes artist) because it only refreshes every 30 s — a full canvas
+    # redraw at that cadence is negligible.
+    pi_health_txt = fig.text(
+        0.985, 0.965,
+        "… querying pi telemetry …",
+        ha="right", va="top",
+        fontsize=8, color=TEXT_MUTED, family="monospace", alpha=0.85,
     )
     ax_bars     = fig.add_subplot(gs[1:3, 0])
     ax_water    = fig.add_subplot(gs[1,   1])
@@ -748,6 +832,42 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
             if kind == "overview_status":
                 overview_status_txt.set_text(payload)
                 continue
+            if kind == "pi_health":
+                if payload is None:
+                    pi_health_txt.set_text("pi offline (ssh failed)")
+                    pi_health_txt.set_color("#ff7c3a")
+                else:
+                    info = payload
+                    svc = info.get("SVC", "?")
+                    errs = info.get("ERR24", "0")
+                    temp = info.get("TEMP", "?")
+                    # Colour: green if active+no errors, orange if errors,
+                    # red if service down. Temperature warning >70C.
+                    if svc != "active":
+                        col = "#ff5050"
+                    elif errs not in ("0", ""):
+                        col = "#ff7c3a"
+                    else:
+                        col = TEXT_MUTED
+                    try:
+                        if float(temp) >= 70.0:
+                            col = "#ff7c3a"
+                    except (TypeError, ValueError):
+                        pass
+                    lines = [
+                        f"svc:  {svc}",
+                        f"ip:   {info.get('IP', '?')}",
+                        f"temp: {temp}\u00b0C",
+                        f"up:   {info.get('UP', '?')}",
+                        f"load: {info.get('LOAD', '?')}"
+                                f"  mem: {info.get('MEM', '?')}",
+                        f"disk: {info.get('DISK', '?')}"
+                                f"  err24h: {errs}",
+                    ]
+                    pi_health_txt.set_text("\n".join(lines))
+                    pi_health_txt.set_color(col)
+                fig.canvas.draw_idle()
+                continue
 
             line = payload
             state["connected"] = True
@@ -961,8 +1081,11 @@ def main():
                               args=(ssh_dest, ui_q, stop), daemon=True)
     t_ov   = threading.Thread(target=overview_thread,
                               args=(req_q, ui_q, stop), daemon=True)
+    t_health = threading.Thread(target=pi_health_thread,
+                                args=(ssh_dest, ui_q, stop), daemon=True)
     t_tail.start()
     t_ov.start()
+    t_health.start()
     try:
         run_ui(ui_q, req_q, ssh_dest=ssh_dest)
     finally:
