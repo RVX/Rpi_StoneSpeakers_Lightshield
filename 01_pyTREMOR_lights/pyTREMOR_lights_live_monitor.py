@@ -355,6 +355,24 @@ def _fmt_age(secs):
     return f"{h}h{m:02d}m ago"
 
 
+_ORDINAL_WORDS = (
+    "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+    "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth",
+    "fourteenth", "fifteenth", "sixteenth", "seventeenth", "eighteenth",
+    "nineteenth", "twentieth",
+)
+
+
+def _ordinal_word(n):
+    """1 -> 'first', 2 -> 'second', … ; falls back to '21st', '42nd' etc."""
+    if 1 <= n <= len(_ORDINAL_WORDS):
+        return _ORDINAL_WORDS[n - 1]
+    suffix = "th"
+    if n % 100 not in (11, 12, 13):
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def pi_health_thread(ssh_dest, q, stop_event, period=30.0):
     """Poll Pi telemetry every `period` seconds and push to the UI.
 
@@ -953,7 +971,7 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
             op_col = "#ff7c3a"
         eta = _fmt_eta(state["window_dur_s"], state["last_cur"])
         pass_n = int(state.get("ov_pass", 1) or 1)
-        pass_str = f"pass {pass_n}" if pass_n > 1 else "first pass"
+        pass_str = _ordinal_word(pass_n)
         op_lines = [
             f"last log:   {_fmt_age(age)}",
             f"fdsn:       {src}",
@@ -1146,16 +1164,12 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
             ov_played.set_width(cur_pos)
 
         if tick % 6 == 0:   # ~10 fps data refresh for status text
-            ov_dur = max(1.0, state["ov_duration"])
-            pass_n = int(state["last_cur"] // ov_dur) + 1
-            pass_str = f"pass {pass_n}" if pass_n > 1 else "first pass"
             status_txt.set_text(
                 f"replay t = {state['last_cur']:7.1f} s   \u00b7   "
                 f"centroid = {state['last_cen']:5.2f} Hz   \u00b7   "
                 f"PWM = {state['last_pwm']:4d} Hz   \u00b7   "
                 f"frames = {state['n_frames']}   \u00b7   "
-                f"bursts = {state['n_bursts']}   \u00b7   "
-                f"[{pass_str}]"
+                f"bursts = {state['n_bursts']}"
                 + ("" if state["connected"] else "   [waiting for ssh…]")
             )
             # Live UTC clock + (if known) the FDSN window being replayed,
