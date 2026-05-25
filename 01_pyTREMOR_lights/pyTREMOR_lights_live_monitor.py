@@ -552,11 +552,11 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     ax_bars.set_ylabel("LED brightness  (%)", color=TEXT_MUTED, fontsize=9)
     ax_bars.set_title(
         "LED OUTPUT  ·  L1–L8",
-        color=TEXT_PRIMARY, fontsize=11, pad=34,
+        color=TEXT_PRIMARY, fontsize=11, pad=22,
         fontweight="bold", loc="center",
     )
     ax_bars.text(
-        0.5, 1.005,
+        0.5, 1.06,
         "one bar = brightness of one seismic frequency band\n"
         "low (L1–L3 ≈ 1–3 Hz) = deep tremor  ·  high (L6–L8 ≈ 6–18 Hz) = sharp bursts",
         transform=ax_bars.transAxes,
@@ -580,11 +580,11 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     ax_water.set_xlabel("time  (seconds ago  →  now)", color=TEXT_MUTED, fontsize=9)
     ax_water.set_title(
         "PER-BAND HISTORY  ·  60 s WATERFALL",
-        color=TEXT_PRIMARY, fontsize=11, pad=34,
+        color=TEXT_PRIMARY, fontsize=11, pad=22,
         fontweight="bold", loc="center",
     )
     ax_water.text(
-        0.5, 1.005,
+        0.5, 1.06,
         "each row = one LED (L1 low → L8 high)\n"
         "colour = brightness %",
         transform=ax_water.transAxes,
@@ -608,11 +608,11 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     ax_cen.set_ylabel("spectral centroid  (Hz)", color=TEXT_MUTED, fontsize=9)
     ax_cen.set_title(
         "SPECTRAL CENTROID  →  PWM FLICKER FREQUENCY",
-        color=TEXT_PRIMARY, fontsize=11, pad=34,
+        color=TEXT_PRIMARY, fontsize=11, pad=22,
         fontweight="bold", loc="center",
     )
     ax_cen.text(
-        0.5, 1.005,
+        0.5, 1.06,
         "centroid = ‘centre of mass’ of the seismic spectrum\n"
         "drives the LED PWM flicker rate",
         transform=ax_cen.transAxes,
@@ -647,11 +647,11 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     )
     ax_overview.set_title(
         "FULL SONIFICATION PREVIEW  ·  WHOLE SEISMIC CACHE",
-        color=TEXT_PRIMARY, fontsize=11, pad=28,
+        color=TEXT_PRIMARY, fontsize=11, pad=18,
         fontweight="bold", loc="center",
     )
     ax_overview.text(
-        0.5, 1.005,
+        0.5, 1.04,
         "what the lamp will play across the whole hour   ·   "
         "rows = LEDs L1–L8   ·   colour = upcoming brightness per band",
         transform=ax_overview.transAxes,
