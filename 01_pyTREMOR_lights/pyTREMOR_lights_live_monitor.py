@@ -537,14 +537,14 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
             i, -0.05, f"L{i+1}",
             transform=_bar_tick_trans,
             ha="center", va="top",
-            fontsize=9.5, fontweight="bold", color=TEXT_PRIMARY,
+            fontsize=9, fontweight="bold", color=TEXT_PRIMARY,
             clip_on=False,
         )
         ax_bars.text(
-            i, -0.12, f"{BAND_EDGES[i]:.1f}–{BAND_EDGES[i+1]:.1f} Hz",
+            i, -0.105, f"{BAND_EDGES[i]:.1f}–{BAND_EDGES[i+1]:.1f}Hz",
             transform=_bar_tick_trans,
             ha="center", va="top",
-            fontsize=7, color=TEXT_MUTED,
+            fontsize=6, color=TEXT_MUTED,
             clip_on=False,
         )
     ax_bars.tick_params(axis="x", pad=18, length=0)   # leave room for LED circles
@@ -552,16 +552,16 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     ax_bars.set_ylabel("LED brightness  (%)", color=TEXT_MUTED, fontsize=9)
     ax_bars.set_title(
         "LED OUTPUT  ·  L1–L8",
-        color=TEXT_PRIMARY, fontsize=11.5, pad=24,
+        color=TEXT_PRIMARY, fontsize=11, pad=34,
         fontweight="bold", loc="center",
     )
     ax_bars.text(
         0.5, 1.005,
-        "one bar = brightness of one seismic frequency band   ·   "
-        "low (L1–L3 ≈ 1–3 Hz) = deep tremor   ·   high (L6–L8 ≈ 6–18 Hz) = sharp bursts",
+        "one bar = brightness of one seismic frequency band\n"
+        "low (L1–L3 ≈ 1–3 Hz) = deep tremor  ·  high (L6–L8 ≈ 6–18 Hz) = sharp bursts",
         transform=ax_bars.transAxes,
         ha="center", va="bottom",
-        fontsize=8, color=TEXT_MUTED, style="italic",
+        fontsize=7.5, color=TEXT_MUTED, style="italic",
     )
     ax_bars.grid(axis="y", color=GRID_COLOR, alpha=0.5, linewidth=0.6)
     ax_bars.set_axisbelow(True)
@@ -580,15 +580,16 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     ax_water.set_xlabel("time  (seconds ago  →  now)", color=TEXT_MUTED, fontsize=9)
     ax_water.set_title(
         "PER-BAND HISTORY  ·  60 s WATERFALL",
-        color=TEXT_PRIMARY, fontsize=11.5, pad=24,
+        color=TEXT_PRIMARY, fontsize=11, pad=34,
         fontweight="bold", loc="center",
     )
     ax_water.text(
         0.5, 1.005,
-        "each row = one LED (L1 low → L8 high)   ·   colour = brightness %",
+        "each row = one LED (L1 low → L8 high)\n"
+        "colour = brightness %",
         transform=ax_water.transAxes,
         ha="center", va="bottom",
-        fontsize=8, color=TEXT_MUTED, style="italic",
+        fontsize=7.5, color=TEXT_MUTED, style="italic",
     )
     cbar = fig.colorbar(im, ax=ax_water, fraction=0.035, pad=0.015)
     cbar.outline.set_edgecolor(GRID_COLOR)
@@ -607,15 +608,16 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     ax_cen.set_ylabel("spectral centroid  (Hz)", color=TEXT_MUTED, fontsize=9)
     ax_cen.set_title(
         "SPECTRAL CENTROID  →  PWM FLICKER FREQUENCY",
-        color=TEXT_PRIMARY, fontsize=11.5, pad=24,
+        color=TEXT_PRIMARY, fontsize=11, pad=34,
         fontweight="bold", loc="center",
     )
     ax_cen.text(
         0.5, 1.005,
-        "centroid = the ‘centre of mass’ of the seismic spectrum   ·   drives the LED PWM rate",
+        "centroid = ‘centre of mass’ of the seismic spectrum\n"
+        "drives the LED PWM flicker rate",
         transform=ax_cen.transAxes,
         ha="center", va="bottom",
-        fontsize=8, color=TEXT_MUTED, style="italic",
+        fontsize=7.5, color=TEXT_MUTED, style="italic",
     )
     ax_cen.grid(color=GRID_COLOR, alpha=0.4, linewidth=0.6)
     ax_cen.set_axisbelow(True)
@@ -645,7 +647,7 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     )
     ax_overview.set_title(
         "FULL SONIFICATION PREVIEW  ·  WHOLE SEISMIC CACHE",
-        color=TEXT_PRIMARY, fontsize=11.5, pad=24,
+        color=TEXT_PRIMARY, fontsize=11, pad=28,
         fontweight="bold", loc="center",
     )
     ax_overview.text(
@@ -654,7 +656,7 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         "rows = LEDs L1–L8   ·   colour = upcoming brightness per band",
         transform=ax_overview.transAxes,
         ha="center", va="bottom",
-        fontsize=8, color=TEXT_MUTED, style="italic",
+        fontsize=7.5, color=TEXT_MUTED, style="italic",
     )
 
     # --- status strip (sits between the header texts and the plots) ------
