@@ -577,6 +577,37 @@ SOFT_CMAP = matplotlib.colors.LinearSegmentedColormap.from_list(
 )
 
 
+def _mac_from_link_local(host):
+    """If `host` is an EUI-64 fe80:: address, return the embedded MAC.
+
+    fe80::8aa2:9eff:fed7:9f99 -> '88:a2:9e:d7:9f:99'
+    Returns None for anything that isn't a recognisable link-local EUI-64.
+    """
+    h = host.split("%", 1)[0].lower()
+    if not h.startswith("fe80:"):
+        return None
+    # Last four hextets carry the MAC with ff:fe inserted + U/L bit flipped
+    parts = h.split(":")
+    parts = [p for p in parts if p != ""]
+    if len(parts) < 4:
+        return None
+    try:
+        a, b, c, d = (int(p, 16) for p in parts[-4:])
+    except ValueError:
+        return None
+    if (b & 0xFF) != 0xFF or (c >> 8) != 0xFE:
+        return None  # no ff:fe marker -> not EUI-64
+    b0 = (a >> 8) ^ 0x02   # flip universal/local bit
+    b1 = a & 0xFF
+    b2 = b >> 8
+    b3 = c & 0xFF
+    b4 = d >> 8
+    b5 = d & 0xFF
+    return "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}".format(
+        b0, b1, b2, b3, b4, b5
+    )
+
+
 def _pi_label(ssh_dest):
     """Return (short, long) labels for the Pi being monitored.
 
@@ -598,6 +629,9 @@ def _pi_label(ssh_dest):
         host_disp = f"{head.split(':',2)[0]}::\u2026{tail}"
     else:
         host_disp = host
+    mac = _mac_from_link_local(host)
+    if mac:
+        host_disp = f"{host_disp}  [mac {mac}]"
     long = f"{user} \u00b7 {host_disp}" if user else host_disp
     return short, long
 
@@ -1168,9 +1202,10 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
 
         # Operational telemetry (staleness + ETA) ticks even when nothing
         # arrives on the queue — so a frozen Pi visibly ages on screen.
-        # ~1 Hz at 60 fps is plenty and the diff-check in _refresh_telemetry
-        # keeps draw_idle() quiet when nothing actually changed.
-        if tick % 60 == 0:
+        # Every 5 s (300 ticks @ 60 fps): figure-level fig.text is NOT
+        # blit-safe, so each draw_idle() repaints the whole canvas — at
+        # 1 Hz that's a visible flicker. 5 s is granular enough for ages.
+        if tick % 300 == 0:
             _refresh_telemetry()
 
         if tick % 4 == 0:   # ~15 fps data refresh for waterfall + centroid
