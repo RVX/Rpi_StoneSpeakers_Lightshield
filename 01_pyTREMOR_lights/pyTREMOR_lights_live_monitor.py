@@ -623,14 +623,14 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         "… querying pi telemetry …",
         ha="right", va="top",
         fontsize=7.5, color=TEXT_MUTED, family="monospace", alpha=0.85,
-        linespacing=1.45,
+        linespacing=1.5,
     )
     pi_op_txt = fig.text(
         0.015, 0.965,
         "… waiting for first log line …",
         ha="left", va="top",
         fontsize=7.5, color=TEXT_MUTED, family="monospace", alpha=0.85,
-        linespacing=1.45,
+        linespacing=1.5,
     )
     ax_bars     = fig.add_subplot(gs[1:3, 0])
     ax_water    = fig.add_subplot(gs[1,   1])
@@ -957,7 +957,7 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         op_lines = [
             f"last log:   {_fmt_age(age)}",
             f"fdsn:       {src}",
-            f"loop:       {pass_str}",
+            f"pass:       {pass_str}",
             f"next fetch: {eta}",
             f"reconnects: {state['reconnect_count']}",
         ]
