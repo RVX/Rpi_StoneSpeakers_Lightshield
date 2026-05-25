@@ -695,7 +695,7 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     # "last log" age and next-fetch ETA. Two text artists side by side so
     # we can colour them independently (hardware vs operational state).
     pi_health_txt = fig.text(
-        0.985, 0.965,
+        0.985, 0.935,
         "… querying pi telemetry …",
         ha="right", va="top",
         fontsize=7.5, color=TEXT_MUTED, family="monospace", alpha=0.85,
