@@ -630,9 +630,8 @@ def _pi_label(ssh_dest):
     else:
         host_disp = host
     mac = _mac_from_link_local(host)
-    if mac:
-        host_disp = f"{host_disp}  [mac {mac}]"
-    long = f"{user} \u00b7 {host_disp}" if user else host_disp
+    # Two-line badge: host on row 1, MAC on row 2 (if derivable)
+    long = f"{host_disp}\nmac {mac}" if mac else host_disp
     return short, long
 
 
