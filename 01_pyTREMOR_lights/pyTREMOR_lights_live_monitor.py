@@ -432,7 +432,7 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         # rows 1–2 = bars / waterfall / centroid
         # row 3 = overview spectrogram (full width)
         height_ratios=[0.55, 1.0, 1.0, 0.85],
-        hspace=0.80, wspace=0.22,
+        hspace=1.15, wspace=0.22,
         left=0.06, right=0.97, top=0.86, bottom=0.07,
     )
     # ------ Centered header block ----------------------------------------
@@ -526,18 +526,42 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     # baseline line dividing bars from LED preview
     ax_bars.axhline(0, color=GRID_COLOR, lw=0.8, alpha=0.7)
     ax_bars.set_xticks(range(8))
-    ax_bars.set_xticklabels(
-        short_band_labels,
-        fontsize=7, color=TEXT_MUTED,
-    )
-    ax_bars.tick_params(axis="x", pad=18)   # leave room for LED circles
+    # Custom 2-row tick labels: bold L# on top, smaller Hz range below.
+    # Done as ax.text (not set_xticklabels) because matplotlib tick labels
+    # can't mix font sizes/weights between lines within a single label.
+    ax_bars.set_xticklabels([""] * 8)
+    from matplotlib.transforms import blended_transform_factory
+    _bar_tick_trans = blended_transform_factory(ax_bars.transData, ax_bars.transAxes)
+    for i in range(8):
+        ax_bars.text(
+            i, -0.05, f"L{i+1}",
+            transform=_bar_tick_trans,
+            ha="center", va="top",
+            fontsize=9.5, fontweight="bold", color=TEXT_PRIMARY,
+            clip_on=False,
+        )
+        ax_bars.text(
+            i, -0.12, f"{BAND_EDGES[i]:.1f}–{BAND_EDGES[i+1]:.1f} Hz",
+            transform=_bar_tick_trans,
+            ha="center", va="top",
+            fontsize=7, color=TEXT_MUTED,
+            clip_on=False,
+        )
+    ax_bars.tick_params(axis="x", pad=18, length=0)   # leave room for LED circles
     ax_bars.set_yticks([0, 25, 50, 75, 100])
     ax_bars.set_ylabel("LED brightness  (%)", color=TEXT_MUTED, fontsize=9)
     ax_bars.set_title(
-        "LED output L1–L8  ·  one bar = brightness of one seismic frequency band\n"
-        "low bands (L1–L3 ≈ 1–3 Hz) = deep tremor  ·  high bands (L6–L8 ≈ 6–18 Hz) = sharp bursts",
-        color=TEXT_PRIMARY, fontsize=10, pad=10,
+        "LED OUTPUT  ·  L1–L8",
+        color=TEXT_PRIMARY, fontsize=11.5, pad=24,
         fontweight="bold", loc="center",
+    )
+    ax_bars.text(
+        0.5, 1.005,
+        "one bar = brightness of one seismic frequency band   ·   "
+        "low (L1–L3 ≈ 1–3 Hz) = deep tremor   ·   high (L6–L8 ≈ 6–18 Hz) = sharp bursts",
+        transform=ax_bars.transAxes,
+        ha="center", va="bottom",
+        fontsize=8, color=TEXT_MUTED, style="italic",
     )
     ax_bars.grid(axis="y", color=GRID_COLOR, alpha=0.5, linewidth=0.6)
     ax_bars.set_axisbelow(True)
@@ -555,10 +579,16 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
                              color=TEXT_MUTED, fontsize=8)
     ax_water.set_xlabel("time  (seconds ago  →  now)", color=TEXT_MUTED, fontsize=9)
     ax_water.set_title(
-        "per-band history  ·  60 s waterfall\n"
-        "each row = one LED (L1 low → L8 high)  ·  colour = brightness %",
-        color=TEXT_PRIMARY, fontsize=10, pad=10,
+        "PER-BAND HISTORY  ·  60 s WATERFALL",
+        color=TEXT_PRIMARY, fontsize=11.5, pad=24,
         fontweight="bold", loc="center",
+    )
+    ax_water.text(
+        0.5, 1.005,
+        "each row = one LED (L1 low → L8 high)   ·   colour = brightness %",
+        transform=ax_water.transAxes,
+        ha="center", va="bottom",
+        fontsize=8, color=TEXT_MUTED, style="italic",
     )
     cbar = fig.colorbar(im, ax=ax_water, fraction=0.035, pad=0.015)
     cbar.outline.set_edgecolor(GRID_COLOR)
@@ -576,10 +606,16 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
     ax_cen.set_xlabel("time  (seconds ago  →  now)", color=TEXT_MUTED, fontsize=9)
     ax_cen.set_ylabel("spectral centroid  (Hz)", color=TEXT_MUTED, fontsize=9)
     ax_cen.set_title(
-        "spectral centroid  →  PWM flicker frequency\n"
-        "centroid = the ‘centre of mass’ of the seismic spectrum  ·  drives the LED PWM rate",
-        color=TEXT_PRIMARY, fontsize=10, pad=10,
+        "SPECTRAL CENTROID  →  PWM FLICKER FREQUENCY",
+        color=TEXT_PRIMARY, fontsize=11.5, pad=24,
         fontweight="bold", loc="center",
+    )
+    ax_cen.text(
+        0.5, 1.005,
+        "centroid = the ‘centre of mass’ of the seismic spectrum   ·   drives the LED PWM rate",
+        transform=ax_cen.transAxes,
+        ha="center", va="bottom",
+        fontsize=8, color=TEXT_MUTED, style="italic",
     )
     ax_cen.grid(color=GRID_COLOR, alpha=0.4, linewidth=0.6)
     ax_cen.set_axisbelow(True)
@@ -608,10 +644,17 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         color=TEXT_MUTED, fontsize=9,
     )
     ax_overview.set_title(
-        "full sonification preview  ·  what the lamp will play across the whole cache\n"
-        "rows = LEDs L1–L8  ·  colour = upcoming brightness per band along the hour",
-        color=TEXT_PRIMARY, fontsize=10, pad=10,
+        "FULL SONIFICATION PREVIEW  ·  WHOLE SEISMIC CACHE",
+        color=TEXT_PRIMARY, fontsize=11.5, pad=24,
         fontweight="bold", loc="center",
+    )
+    ax_overview.text(
+        0.5, 1.005,
+        "what the lamp will play across the whole hour   ·   "
+        "rows = LEDs L1–L8   ·   colour = upcoming brightness per band",
+        transform=ax_overview.transAxes,
+        ha="center", va="bottom",
+        fontsize=8, color=TEXT_MUTED, style="italic",
     )
 
     # --- status strip (sits between the header texts and the plots) ------
