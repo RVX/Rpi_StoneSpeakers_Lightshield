@@ -112,6 +112,30 @@ python 01_pyTREMOR_lights\pyTREMOR_lights_live_monitor.py sjc1@sjc2.local
 Window positions are persisted per-process, so once arranged on screen
 they reopen in the same layout.
 
+Each monitor window also shows a live **Pi telemetry block** in the
+top-right corner, refreshed every 30 s via a single SSH round-trip:
+
+```
+svc:  active
+ip:   192.168.1.42
+temp: 52.3°C
+up:   3 hours, 12 minutes
+load: 0.45  mem: 234/3848M
+disk: 12%   err24h: 0
+```
+
+Colour cues make problems visible at a glance across the 5-Pi wall:
+
+| Condition                                   | Colour       |
+|---------------------------------------------|--------------|
+| Healthy (`svc=active`, no errors, < 70 °C)  | muted grey   |
+| Errors in last 24 h, or CPU ≥ 70 °C          | orange       |
+| `svc != active`                              | red          |
+| SSH snapshot failed (Pi unreachable)        | orange, text reads `pi offline (ssh failed)` |
+
+The telemetry SSH call uses `BatchMode=yes` and an 8 s connect timeout,
+so a missing Pi cannot stall the UI.
+
 ## 8. SD card backup
 
 Software resilience cannot protect the SD card itself against bit-rot
