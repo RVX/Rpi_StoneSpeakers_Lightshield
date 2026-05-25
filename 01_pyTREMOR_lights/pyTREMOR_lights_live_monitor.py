@@ -555,8 +555,12 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         color=TEXT_PRIMARY, fontsize=11, pad=22,
         fontweight="bold", loc="center",
     )
+    # NOTE: ax_bars spans TWO gridspec rows while ax_water spans one, so
+    # the same axes-fraction y maps to a much larger absolute pixel offset
+    # on bars. Subtitle y=1.02 here ≈ same absolute height above the graph
+    # as water/cen subtitles at y=1.06 (their axes are ~3× shorter).
     ax_bars.text(
-        0.5, 1.06,
+        0.5, 1.02,
         "one bar = brightness of one seismic frequency band\n"
         "low (L1–L3 ≈ 1–3 Hz) = deep tremor  ·  high (L6–L8 ≈ 6–18 Hz) = sharp bursts",
         transform=ax_bars.transAxes,
