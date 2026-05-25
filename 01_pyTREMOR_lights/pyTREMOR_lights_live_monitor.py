@@ -623,14 +623,14 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         "… querying pi telemetry …",
         ha="right", va="top",
         fontsize=7.5, color=TEXT_MUTED, family="monospace", alpha=0.85,
-        linespacing=0.95,
+        linespacing=1.45,
     )
     pi_op_txt = fig.text(
         0.015, 0.965,
         "… waiting for first log line …",
         ha="left", va="top",
         fontsize=7.5, color=TEXT_MUTED, family="monospace", alpha=0.85,
-        linespacing=0.95,
+        linespacing=1.45,
     )
     ax_bars     = fig.add_subplot(gs[1:3, 0])
     ax_water    = fig.add_subplot(gs[1,   1])
@@ -952,9 +952,12 @@ def run_ui(q, req_q=None, ssh_dest=SSH_DEST_DEFAULT):
         elif src.startswith("cache (fallback)"):
             op_col = "#ff7c3a"
         eta = _fmt_eta(state["window_dur_s"], state["last_cur"])
+        pass_n = int(state.get("ov_pass", 1) or 1)
+        pass_str = f"pass {pass_n}" if pass_n > 1 else "first pass"
         op_lines = [
             f"last log:   {_fmt_age(age)}",
             f"fdsn:       {src}",
+            f"loop:       {pass_str}",
             f"next fetch: {eta}",
             f"reconnects: {state['reconnect_count']}",
         ]
